@@ -1,9 +1,9 @@
 name: Tests
 
-# Deactivated: no implementation to test yet. Re-enable by restoring the
-# `pull_request` trigger below.
 on:
-  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
 
 jobs:
   alertmanager-rules-lint:
