@@ -185,9 +185,7 @@ def test_ingress_url_change_propagates(harness):
     ingress_rel = _relate_ingress(harness)
 
     new_url = "http://n8n-2.example.com/"
-    harness.update_relation_data(
-        ingress_rel, INGRESS_REMOTE, {"ingress": json.dumps({"url": new_url})}
-    )
+    harness.update_relation_data(ingress_rel, INGRESS_REMOTE, {"ingress": json.dumps({"url": new_url})})
 
     env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
     assert env["N8N_HOST"] == "n8n-2.example.com"
