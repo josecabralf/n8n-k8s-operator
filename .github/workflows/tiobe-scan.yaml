@@ -1,0 +1,16 @@
+name: Tiobe TiCS Analysis
+
+# Deactivated: no code to scan yet. Re-enable by restoring the
+# `pull_request` and `schedule` triggers below.
+on:
+    workflow_dispatch:
+
+jobs:
+    tics:
+        name: TiCs
+        # Only run if we have access to secrets.
+        if: github.event_name != 'pull_request' || github.repository == github.event.pull_request.head.repo.full_name
+        uses: canonical/observability/.github/workflows/charm-tiobe-scan.yaml@main
+        with: 
+            coverage-folder: ".cover"
+        secrets: inherit

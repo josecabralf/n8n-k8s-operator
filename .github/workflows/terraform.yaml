@@ -1,0 +1,14 @@
+name: Terraform checks
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+# Deactivated: no Terraform module to check yet. Re-enable by restoring the
+# `pull_request` / `workflow_call` triggers below.
+on:
+  workflow_dispatch:
+
+jobs:
+  pull-request-terraform-checks:
+    name: PR Terraform checks
+    uses: canonical/workflows-team/.github/workflows/terraform.yaml@main

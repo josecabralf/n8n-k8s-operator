@@ -1,0 +1,38 @@
+# Local planning / scratch
+plan/
+worktrees/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Charm build artifacts
+*.charm
+.charmcraft/
+
+# Test / lint caches
+.tox/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+.claude/
