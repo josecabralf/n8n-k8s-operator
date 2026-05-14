@@ -43,13 +43,12 @@ class N8nK8sCharm(CharmBase):
             self,
             relation_name=INGRESS_RELATION_NAME,
             port=N8N_PORT,
-            strip_prefix=False,
+            # Strip prefix at traefik; N8N_PATH tells n8n its public mount so emitted URLs keep it.
+            strip_prefix=True,
         )
         self.framework.observe(self.ingress.on.ready, self._on_ingress_changed)
         self.framework.observe(self.ingress.on.revoked, self._on_ingress_changed)
-        self.framework.observe(
-            self.on[INGRESS_RELATION_NAME].relation_broken, self._on_ingress_changed
-        )
+        self.framework.observe(self.on[INGRESS_RELATION_NAME].relation_broken, self._on_ingress_changed)
         self.framework.observe(self.on.install, self._on_install)
         self.framework.observe(self.on.config_changed, self._on_config_changed)
         self.framework.observe(self.on.n8n_pebble_ready, self._on_pebble_ready)
