@@ -16,6 +16,18 @@ consists of Python scripts which wrap the versions distributed by
 standard Canonical relations (PostgreSQL, ingress, COS Lite, S3), automatic
 encryption-key management, and a clean upgrade path on Juju Kubernetes clouds.
 
+## Encryption-key handling (read before deploy)
+
+n8n encrypts every stored credential with `N8N_ENCRYPTION_KEY`. The charm
+auto-generates this key as a Juju app secret on install. Run
+`juju run n8n-k8s/0 get-encryption-key` immediately after deploy and store
+the result offsite — if you lose it, every stored credential is bricked.
+**Encryption-key rotation is NOT supported in v1.** Changing the
+`encryption-key` config after the charm has stored credentials will brick
+them. Use the override only when migrating from an existing n8n install:
+create a Juju user secret with a `value` field, grant it to the
+application, and set `encryption-key=secret:<id>`.
+
 ## Contributing
 
 This charm is still in active development. Please see the

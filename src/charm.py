@@ -1,29 +1,34 @@
 #!/usr/bin/env python3
-"""n8n Kubernetes charm — skeleton (issue #2)."""
+"""n8n Kubernetes charm — encryption-key + Postgres relation (issue #3)."""
 
 from __future__ import annotations
 
 import logging
+import secrets
 
+import ops
 from charms.data_platform_libs.v0.data_interfaces import DatabaseRequires
 from ops import main, pebble
 from ops.charm import CharmBase
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
 
 from pebble import build_layer
+from state import PEER_RELATION_NAME, CharmState
 
 logger = logging.getLogger(__name__)
 
 CONTAINER_NAME = "n8n"
 SERVICE_NAME = "n8n"
 DB_RELATION_NAME = "postgresql"
-PEER_RELATION_NAME = "n8n-peers"
 DATABASE_NAME = "n8n"
 N8N_PORT = 5678
 
+ENCRYPTION_KEY_SECRET_LABEL = "n8n-encryption-key"
+ENCRYPTION_KEY_CONFIG = "encryption-key"
+
 
 class N8nK8sCharm(CharmBase):
-    """Skeleton charm: blocked until Postgres relation is joined."""
+    """Charm: manages Postgres relation, app-owned encryption-key secret, and pebble layer."""
 
     def __init__(self, *args):
         super().__init__(*args)
@@ -33,20 +38,33 @@ class N8nK8sCharm(CharmBase):
             database_name=DATABASE_NAME,
         )
         self.framework.observe(self.on.install, self._on_install)
+        self.framework.observe(self.on.config_changed, self._on_config_changed)
         self.framework.observe(self.on.n8n_pebble_ready, self._on_pebble_ready)
         self.framework.observe(self.on.update_status, self._on_update_status)
+        self.framework.observe(self.on.secret_changed, self._on_secret_changed)
+        self.framework.observe(self.on[PEER_RELATION_NAME].relation_created, self._on_peer_created)
         self.framework.observe(self.on[DB_RELATION_NAME].relation_created, self._on_database_changed)
         self.framework.observe(self.database.on.database_created, self._on_database_changed)
         self.framework.observe(self.database.on.endpoints_changed, self._on_database_changed)
         self.framework.observe(self.on[DB_RELATION_NAME].relation_broken, self._on_database_broken)
+        self.framework.observe(self.on.get_encryption_key_action, self._on_get_encryption_key_action)
 
     def _on_install(self, _event) -> None:
+        self._reconcile()
+
+    def _on_config_changed(self, _event) -> None:
         self._reconcile()
 
     def _on_pebble_ready(self, _event) -> None:
         self._reconcile()
 
     def _on_update_status(self, _event) -> None:
+        self._reconcile()
+
+    def _on_secret_changed(self, _event) -> None:
+        self._reconcile()
+
+    def _on_peer_created(self, _event) -> None:
         self._reconcile()
 
     def _on_database_changed(self, _event) -> None:
@@ -61,7 +79,66 @@ class N8nK8sCharm(CharmBase):
                 logger.debug("n8n service was not running on relation-broken")
         self.unit.status = BlockedStatus("waiting for postgresql relation")
 
+    def _on_get_encryption_key_action(self, event: ops.ActionEvent) -> None:
+        key, msg = self._effective_encryption_key()
+        if key is None:
+            event.fail(msg or "encryption key not yet available")
+            return
+        event.set_results({"encryption-key": key})
+
+    def _effective_encryption_key(self) -> tuple[str | None, str | None]:
+        """Return (key, blocked_msg).
+
+        - (key, None): success.
+        - (None, msg): terminal Blocked condition.
+        - (None, None): not-yet-ready; caller should emit WaitingStatus.
+        """
+        override = self.config.get(ENCRYPTION_KEY_CONFIG)
+        if override:
+            try:
+                secret = self.model.get_secret(id=override)
+                content = secret.get_content(refresh=True)
+            except (ops.SecretNotFoundError, ops.ModelError):
+                return (None, "encryption-key secret not granted to app")
+            value = content.get("value")
+            if not value:
+                return (None, "encryption-key secret missing 'value' field")
+            return (value, None)
+
+        state = CharmState(self)
+        if state.peer_relation is None:
+            return (None, None)
+
+        if state.encryption_key_secret_id is None:
+            if not self.unit.is_leader():
+                return (None, None)
+            generated = secrets.token_hex(24)
+            secret = self.app.add_secret(
+                content={"value": generated},
+                label=ENCRYPTION_KEY_SECRET_LABEL,
+            )
+            state.encryption_key_secret_id = secret.id
+            return (generated, None)
+
+        try:
+            secret = self.model.get_secret(id=state.encryption_key_secret_id)
+            content = secret.get_content()
+        except (ops.SecretNotFoundError, ops.ModelError):
+            return (None, "stored encryption-key secret is missing")
+        value = content.get("value")
+        if not value:
+            return (None, "stored encryption-key secret missing 'value' field")
+        return (value, None)
+
     def _reconcile(self) -> None:
+        key, blocked_msg = self._effective_encryption_key()
+        if blocked_msg is not None:
+            self.unit.status = BlockedStatus(blocked_msg)
+            return
+        if key is None:
+            self.unit.status = WaitingStatus("waiting for encryption key")
+            return
+
         db_env = self._db_env()
         if db_env is None:
             if self.model.get_relation(DB_RELATION_NAME) is None:
@@ -76,7 +153,7 @@ class N8nK8sCharm(CharmBase):
             return
 
         self.unit.status = MaintenanceStatus("starting n8n")
-        container.add_layer(CONTAINER_NAME, build_layer(db_env), combine=True)
+        container.add_layer(CONTAINER_NAME, build_layer(db_env, key), combine=True)
         container.replan()
 
         try:
