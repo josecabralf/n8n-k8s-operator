@@ -38,6 +38,27 @@ requires:
     interface: postgresql_client
     limit: 1
 
+config:
+  options:
+    encryption-key:
+      type: secret
+      default: ""
+      description: |
+        Optional Juju user-secret URI (secret:<id>) containing an existing
+        N8N_ENCRYPTION_KEY to use instead of the auto-generated one. The
+        referenced secret must have a field named `value` and must be
+        granted to this application (`juju grant-secret <id> n8n-k8s`).
+        Intended for migrating from an existing n8n install. Rotation is
+        NOT supported in v1 — changing this after deploy bricks every
+        credential stored by n8n.
+
+actions:
+  get-encryption-key:
+    description: |
+      Print the current effective N8N_ENCRYPTION_KEY. Store this offsite
+      for disaster recovery — losing this key bricks every credential
+      stored in n8n's database.
+
 parts:
   charm:
     plugin: charm
