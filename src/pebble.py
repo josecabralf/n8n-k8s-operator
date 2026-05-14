@@ -46,11 +46,10 @@ def build_layer(env: Mapping[str, str]) -> LayerDict:
     """Return a Pebble layer dict that runs n8n with the given env.
 
     Args:
-        env: The fully-merged env dict (DB + URL + future) to install on
-            the n8n service. Callers are responsible for composing this
-            from the DB env (from the postgresql relation) and the URL
-            env (from :func:`build_url_env`); this function just
-            installs whatever it's given.
+        env: The fully-merged env dict (DB + URL + encryption + future)
+            to install on the n8n service. Callers compose this from
+            sources (postgresql relation, ingress URL, encryption-key
+            secret); this function just installs whatever it's given.
 
     Returns:
         A Pebble LayerDict with one service (``n8n``) plus an alive HTTP

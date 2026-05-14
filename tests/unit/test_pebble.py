@@ -13,27 +13,31 @@ DB_ENV = {
     "DB_POSTGRESDB_PASSWORD": "secret",
 }
 
+FULL_ENV = {**DB_ENV, "N8N_ENCRYPTION_KEY": "testkey"}
 
-def test_build_layer_returns_n8n_service_with_six_db_env_vars():
-    layer = build_layer(DB_ENV)
+
+def test_build_layer_returns_n8n_service_with_db_env_and_encryption_key():
+    layer = build_layer(FULL_ENV)
 
     service = layer["services"]["n8n"]
     assert service["command"] == "n8n start"
-    assert service["environment"] == DB_ENV
-    assert len(service["environment"]) == 6
+    for key, value in DB_ENV.items():
+        assert service["environment"][key] == value
+    assert service["environment"]["N8N_ENCRYPTION_KEY"] == "testkey"
+    assert len(service["environment"]) == 7
 
 
 def test_build_layer_environment_is_copied_not_aliased():
-    db_env = dict(DB_ENV)
-    layer = build_layer(db_env)
+    env = dict(FULL_ENV)
+    layer = build_layer(env)
 
     layer["services"]["n8n"]["environment"]["DB_POSTGRESDB_PASSWORD"] = "tampered"
 
-    assert db_env["DB_POSTGRESDB_PASSWORD"] == "secret"
+    assert env["DB_POSTGRESDB_PASSWORD"] == "secret"
 
 
 def test_build_layer_has_live_http_check_on_healthz():
-    layer = build_layer(DB_ENV)
+    layer = build_layer(FULL_ENV)
 
     live = layer["checks"]["live"]
     assert live["http"]["url"] == "http://localhost:5678/healthz"
@@ -42,7 +46,7 @@ def test_build_layer_has_live_http_check_on_healthz():
 
 
 def test_build_layer_has_ready_http_check_on_readiness_endpoint_with_threshold_3():
-    layer = build_layer(DB_ENV)
+    layer = build_layer(FULL_ENV)
 
     ready = layer["checks"]["ready"]
     assert ready["http"]["url"] == "http://localhost:5678/healthz/readiness"
@@ -52,7 +56,7 @@ def test_build_layer_has_ready_http_check_on_readiness_endpoint_with_threshold_3
 
 
 def test_build_layer_service_has_replace_override():
-    layer = build_layer(DB_ENV)
+    layer = build_layer(FULL_ENV)
 
     assert layer["services"]["n8n"]["override"] == "replace"
     assert layer["checks"]["live"]["override"] == "replace"
