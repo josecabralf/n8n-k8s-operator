@@ -42,3 +42,6 @@ parts:
   charm:
     plugin: charm
     source: .
+    override-prime: |
+      craftctl default
+      chmod +x src/charm.py
