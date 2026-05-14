@@ -1,0 +1,44 @@
+name: n8n-k8s
+type: charm
+title: n8n
+summary: Juju Kubernetes charm for n8n workflow automation.
+description: |
+  n8n is a source-available workflow automation platform. This charm
+  operationalises n8n on Juju Kubernetes clouds with opinionated
+  defaults and standard Canonical relations (PostgreSQL, ingress, COS
+  Lite, S3 — additional relations land in later slices).
+
+links:
+  source: https://github.com/josecabralf/n8n-k8s-operator
+  issues: https://github.com/josecabralf/n8n-k8s-operator/issues
+
+assumes:
+  - k8s-api
+  - juju >= 3.3
+
+platforms:
+  ubuntu@24.04:amd64:
+
+containers:
+  n8n:
+    resource: n8n-image
+
+resources:
+  n8n-image:
+    type: oci-image
+    description: OCI image for n8n.
+    upstream-source: docker.n8n.io/n8nio/n8n@sha256:32d7475fd061772a88e485f804f7079dd5641f35502116d1389dcff269c2d72e
+
+peers:
+  n8n-peers:
+    interface: n8n_peers
+
+requires:
+  postgresql:
+    interface: postgresql_client
+    limit: 1
+
+parts:
+  charm:
+    plugin: charm
+    source: .
