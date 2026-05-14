@@ -6,17 +6,19 @@ from __future__ import annotations
 import logging
 
 from charms.data_platform_libs.v0.data_interfaces import DatabaseRequires
+from charms.traefik_k8s.v2.ingress import IngressPerAppRequirer
 from ops import main, pebble
 from ops.charm import CharmBase
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
 
-from pebble import build_layer
+from pebble import build_layer, build_url_env
 
 logger = logging.getLogger(__name__)
 
 CONTAINER_NAME = "n8n"
 SERVICE_NAME = "n8n"
 DB_RELATION_NAME = "postgresql"
+INGRESS_RELATION_NAME = "ingress"
 PEER_RELATION_NAME = "n8n-peers"
 DATABASE_NAME = "n8n"
 N8N_PORT = 5678
@@ -31,6 +33,17 @@ class N8nK8sCharm(CharmBase):
             self,
             relation_name=DB_RELATION_NAME,
             database_name=DATABASE_NAME,
+        )
+        self.ingress = IngressPerAppRequirer(
+            self,
+            relation_name=INGRESS_RELATION_NAME,
+            port=N8N_PORT,
+            strip_prefix=False,
+        )
+        self.framework.observe(self.ingress.on.ready, self._on_ingress_changed)
+        self.framework.observe(self.ingress.on.revoked, self._on_ingress_changed)
+        self.framework.observe(
+            self.on[INGRESS_RELATION_NAME].relation_broken, self._on_ingress_changed
         )
         self.framework.observe(self.on.install, self._on_install)
         self.framework.observe(self.on.n8n_pebble_ready, self._on_pebble_ready)
@@ -52,6 +65,9 @@ class N8nK8sCharm(CharmBase):
     def _on_database_changed(self, _event) -> None:
         self._reconcile()
 
+    def _on_ingress_changed(self, _event) -> None:
+        self._reconcile()
+
     def _on_database_broken(self, _event) -> None:
         container = self.unit.get_container(CONTAINER_NAME)
         if container.can_connect():
@@ -70,13 +86,21 @@ class N8nK8sCharm(CharmBase):
                 self.unit.status = WaitingStatus("waiting for database credentials")
             return
 
+        url_env = self._url_env()
+        if url_env is None:
+            if self.model.get_relation(INGRESS_RELATION_NAME) is None:
+                self.unit.status = BlockedStatus("waiting for ingress relation")
+            else:
+                self.unit.status = WaitingStatus("waiting for ingress url")
+            return
+
         container = self.unit.get_container(CONTAINER_NAME)
         if not container.can_connect():
             self.unit.status = MaintenanceStatus("waiting for pebble")
             return
 
         self.unit.status = MaintenanceStatus("starting n8n")
-        container.add_layer(CONTAINER_NAME, build_layer(db_env), combine=True)
+        container.add_layer(CONTAINER_NAME, build_layer({**db_env, **url_env}), combine=True)
         container.replan()
 
         try:
@@ -106,6 +130,13 @@ class N8nK8sCharm(CharmBase):
             "DB_POSTGRESDB_USER": username,
             "DB_POSTGRESDB_PASSWORD": password,
         }
+
+    def _url_env(self) -> dict | None:
+        """Return the URL env-var dict for n8n, or None if ingress isn't ready."""
+        url = self.ingress.url
+        if not url:
+            return None
+        return build_url_env(url)
 
 
 if __name__ == "__main__":  # pragma: no cover
