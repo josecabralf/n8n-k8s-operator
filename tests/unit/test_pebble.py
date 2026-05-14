@@ -89,35 +89,16 @@ def test_build_url_env_normalises_trailing_slash():
     assert with_slash["N8N_EDITOR_BASE_URL"] == "http://n8n.example.com/"
 
 
-def test_build_url_env_returns_all_six_keys():
+def test_build_url_env_returns_all_five_keys():
     env = build_url_env("http://n8n.example.com/")
 
     assert set(env.keys()) == {
         "N8N_HOST",
         "N8N_PROTOCOL",
         "N8N_PORT",
-        "N8N_PATH",
         "WEBHOOK_URL",
         "N8N_EDITOR_BASE_URL",
     }
-
-
-def test_build_url_env_extracts_path_from_prefix_route():
-    env = build_url_env("http://192.168.0.32/test-n8n-n8n-k8s/")
-
-    assert env["N8N_PATH"] == "/test-n8n-n8n-k8s/"
-
-
-def test_build_url_env_path_is_root_for_no_prefix():
-    env = build_url_env("http://n8n.example.com/")
-
-    assert env["N8N_PATH"] == "/"
-
-
-def test_build_url_env_path_normalises_trailing_slash():
-    env = build_url_env("http://n8n.example.com/foo")
-
-    assert env["N8N_PATH"] == "/foo/"
 
 
 def test_build_layer_takes_merged_env():

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
+import yaml
 from ops.model import ActiveStatus, BlockedStatus, WaitingStatus
 from ops.pebble import CheckStatus
 from ops.testing import ActionFailed, Harness
@@ -15,8 +14,9 @@ from state import ENCRYPTION_KEY_SECRET_ID, PEER_RELATION_NAME
 DB_RELATION = "postgresql"
 INGRESS_RELATION = "ingress"
 INGRESS_REMOTE = "traefik-k8s"
-INGRESS_URL = "http://n8n.example.com/"
-INGRESS_APP_DATA = {"ingress": json.dumps({"url": INGRESS_URL})}
+INGRESS_HOST = "n8n.example.com"
+INGRESS_URL = f"http://{INGRESS_HOST}/"
+INGRESS_APP_DATA = {"external_host": INGRESS_HOST, "scheme": "http"}
 PEER_RELATION = "n8n-peers"
 CONTAINER = "n8n"
 APP_NAME = "n8n-k8s"
@@ -38,20 +38,24 @@ EXPECTED_DB_ENV = {
 }
 
 
-def _begin(harness: Harness) -> None:
-    # The traefik_k8s v2 ingress library validates the requirer app databag with
-    # pydantic and requires a non-empty model name; set one explicitly so the
-    # Harness doesn't trip the validator when an ingress relation joins.
+def _begin(harness: Harness, *, with_ingress: bool = False, with_url: bool = True) -> int | None:
+    """Initialise the harness and (optionally) join the ingress relation.
+
+    The ingress relation must join BEFORE ``begin_with_initial_hooks`` because
+    ``TraefikRouteRequirer`` captures its relation at ``__init__`` time and the
+    Harness only constructs the charm once.
+
+    Returns the ingress relation id when ``with_ingress`` is True, else None.
+    """
     harness.set_model_name("test-model")
     harness.add_relation(PEER_RELATION, APP_NAME)
+    ingress_rel: int | None = None
+    if with_ingress:
+        ingress_rel = harness.add_relation(INGRESS_RELATION, INGRESS_REMOTE)
+        if with_url:
+            harness.update_relation_data(ingress_rel, INGRESS_REMOTE, INGRESS_APP_DATA)
     harness.begin_with_initial_hooks()
-
-
-def _relate_ingress(harness: Harness, *, with_url: bool = True) -> int:
-    rel_id = harness.add_relation(INGRESS_RELATION, INGRESS_REMOTE)
-    if with_url:
-        harness.update_relation_data(rel_id, INGRESS_REMOTE, INGRESS_APP_DATA)
-    return rel_id
+    return ingress_rel
 
 
 def _stored_secret_id(harness: Harness) -> str | None:
@@ -97,62 +101,59 @@ def test_postgres_only_blocks_on_ingress(harness):
 
 
 def test_ingress_relation_without_url_yields_waiting(harness):
-    _begin(harness)
+    _begin(harness, with_ingress=True, with_url=False)
     db_rel = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(db_rel, "postgresql-k8s", DB_DATA)
-    _relate_ingress(harness, with_url=False)
-    # add_relation without app data doesn't fire ingress.on.ready, so nudge a
-    # reconcile via update-status to re-evaluate the relation/URL state.
     harness.charm.on.update_status.emit()
 
     assert harness.charm.unit.status == WaitingStatus("waiting for ingress url")
 
 
 def test_both_relations_ready_writes_full_env(harness):
-    _begin(harness)
+    _begin(harness, with_ingress=True)
     harness.container_pebble_ready(CONTAINER)
     db_rel = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(db_rel, "postgresql-k8s", DB_DATA)
-    _relate_ingress(harness)
 
     plan = harness.get_container_pebble_plan(CONTAINER).to_dict()
     env = plan["services"]["n8n"]["environment"]
     for k, v in EXPECTED_DB_ENV.items():
         assert env[k] == v
-    assert env["N8N_HOST"] == "n8n.example.com"
+    assert env["N8N_HOST"] == INGRESS_HOST
     assert env["N8N_PROTOCOL"] == "http"
     assert env["N8N_PORT"] == "5678"
-    assert env["N8N_PATH"] == "/"
-    assert env["WEBHOOK_URL"] == "http://n8n.example.com/"
-    assert env["N8N_EDITOR_BASE_URL"] == "http://n8n.example.com/"
+    assert "N8N_PATH" not in env
+    assert env["WEBHOOK_URL"] == INGRESS_URL
+    assert env["N8N_EDITOR_BASE_URL"] == INGRESS_URL
     assert "N8N_ENCRYPTION_KEY" in env and env["N8N_ENCRYPTION_KEY"]
     assert plan["checks"]["live"]["http"]["url"].endswith("/healthz")
     assert plan["checks"]["ready"]["http"]["url"].endswith("/healthz/readiness")
 
 
-def test_ingress_with_path_prefix_sets_n8n_path(harness):
-    _begin(harness)
+def test_ingress_publishes_host_routing_config_to_traefik(harness):
+    ingress_rel = _begin(harness, with_ingress=True)
     harness.container_pebble_ready(CONTAINER)
     db_rel = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(db_rel, "postgresql-k8s", DB_DATA)
-    rel_id = harness.add_relation(INGRESS_RELATION, INGRESS_REMOTE)
-    harness.update_relation_data(
-        rel_id,
-        INGRESS_REMOTE,
-        {"ingress": json.dumps({"url": "http://gw.example.com/my-model-my-app/"})},
-    )
 
-    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
-    assert env["N8N_PATH"] == "/my-model-my-app/"
-    assert env["WEBHOOK_URL"] == "http://gw.example.com/my-model-my-app/"
+    config = yaml.safe_load(harness.get_relation_data(ingress_rel, APP_NAME)["config"])
+    routers = config["http"]["routers"]
+    services = config["http"]["services"]
+    assert len(routers) == 1
+    (router,) = routers.values()
+    assert router["rule"] == f"Host(`{INGRESS_HOST}`)"
+    assert router["entryPoints"] == ["web"]
+    assert router["service"] in services
+    server_url = services[router["service"]]["loadBalancer"]["servers"][0]["url"]
+    assert server_url.endswith(":5678")
+    assert server_url.startswith("http://")
 
 
 def test_active_status_once_ready_check_is_up(harness, monkeypatch):
-    _begin(harness)
+    _begin(harness, with_ingress=True)
     harness.container_pebble_ready(CONTAINER)
     db_rel = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(db_rel, "postgresql-k8s", DB_DATA)
-    _relate_ingress(harness)
 
     container = harness.charm.unit.get_container(CONTAINER)
 
@@ -165,11 +166,10 @@ def test_active_status_once_ready_check_is_up(harness, monkeypatch):
 
 
 def test_endpoints_changed_updates_env(harness):
-    _begin(harness)
+    _begin(harness, with_ingress=True)
     harness.container_pebble_ready(CONTAINER)
     db_rel = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(db_rel, "postgresql-k8s", DB_DATA)
-    _relate_ingress(harness)
     harness.update_relation_data(db_rel, "postgresql-k8s", {"endpoints": "10.9.9.9:5433"})
 
     env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
@@ -178,27 +178,26 @@ def test_endpoints_changed_updates_env(harness):
 
 
 def test_ingress_url_change_propagates(harness):
-    _begin(harness)
+    ingress_rel = _begin(harness, with_ingress=True)
     harness.container_pebble_ready(CONTAINER)
     db_rel = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(db_rel, "postgresql-k8s", DB_DATA)
-    ingress_rel = _relate_ingress(harness)
 
-    new_url = "http://n8n-2.example.com/"
-    harness.update_relation_data(ingress_rel, INGRESS_REMOTE, {"ingress": json.dumps({"url": new_url})})
+    new_host = "n8n-2.example.com"
+    new_url = f"http://{new_host}/"
+    harness.update_relation_data(ingress_rel, INGRESS_REMOTE, {"external_host": new_host, "scheme": "http"})
 
     env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
-    assert env["N8N_HOST"] == "n8n-2.example.com"
+    assert env["N8N_HOST"] == new_host
     assert env["WEBHOOK_URL"] == new_url
     assert env["N8N_EDITOR_BASE_URL"] == new_url
 
 
 def test_ingress_relation_broken_reverts_to_blocked(harness):
-    _begin(harness)
+    ingress_rel = _begin(harness, with_ingress=True)
     harness.container_pebble_ready(CONTAINER)
     db_rel = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(db_rel, "postgresql-k8s", DB_DATA)
-    ingress_rel = _relate_ingress(harness)
 
     harness.remove_relation(ingress_rel)
     assert harness.charm.unit.status == BlockedStatus("waiting for ingress relation")
@@ -234,11 +233,10 @@ def test_install_creates_app_secret_once(harness):
 
 
 def test_pebble_env_contains_encryption_key(harness):
-    _begin(harness)
+    _begin(harness, with_ingress=True)
     harness.container_pebble_ready(CONTAINER)
     rel_id = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(rel_id, "postgresql-k8s", DB_DATA)
-    _relate_ingress(harness)
 
     secret_id = _stored_secret_id(harness)
     assert secret_id is not None
@@ -249,11 +247,10 @@ def test_pebble_env_contains_encryption_key(harness):
 
 
 def test_config_override_with_granted_secret(harness):
-    _begin(harness)
+    _begin(harness, with_ingress=True)
     harness.container_pebble_ready(CONTAINER)
     rel_id = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(rel_id, "postgresql-k8s", DB_DATA)
-    _relate_ingress(harness)
 
     user_secret_id = harness.add_user_secret({"value": "OVERRIDE"})
     harness.grant_secret(user_secret_id, APP_NAME)

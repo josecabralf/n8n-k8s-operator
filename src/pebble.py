@@ -12,46 +12,33 @@ N8N_INTERNAL_PORT = "5678"
 
 
 def build_url_env(external_url: str | None) -> dict[str, str]:
-    """Map an ingress URL to the six n8n URL-shaped env vars.
+    """Map an ingress URL to n8n's URL-shaped env vars.
 
-    Returns {} when external_url is None or empty. This is the single
-    source of truth for WEBHOOK_URL derivation so future queue-mode work
-    (where workers also need the public webhook URL) can reuse it.
-
-    The charm relates to traefik with ``strip_prefix=False``, so the
-    ingress routes ``<host>/<model>-<app>/...`` reach the pod with the
-    prefix intact. n8n must therefore know the prefix to emit a
-    ``<base href=...>`` tag in its SPA bootstrap HTML; otherwise the
-    browser fetches ``/assets/...`` (without prefix) and traefik 404s
-    them. ``N8N_PATH`` carries that prefix and must start AND end with
-    ``/``.
+    Returns {} when external_url is None or empty. Single source of truth
+    for WEBHOOK_URL derivation so future queue-mode workers can reuse it.
 
     Args:
         external_url: The public ingress URL for this n8n unit, or None
-            when no ingress is yet established.
+            when no ingress is yet established. The charm uses
+            ``TraefikRouteRequirer`` with host-based routing, so the URL
+            is always rooted (no per-app path prefix).
 
     Returns:
-        A dict with N8N_HOST, N8N_PROTOCOL, N8N_PORT, N8N_PATH,
-        WEBHOOK_URL and N8N_EDITOR_BASE_URL. TLS terminates at the
-        ingress, so N8N_PROTOCOL is always "http". N8N_PATH is the
-        URL's path normalised to start AND end with ``/`` (root URL
-        yields ``"/"``). WEBHOOK_URL and N8N_EDITOR_BASE_URL are
-        normalised to end in exactly one ``/``.
+        A dict with N8N_HOST, N8N_PROTOCOL, N8N_PORT, WEBHOOK_URL and
+        N8N_EDITOR_BASE_URL. TLS terminates at the ingress so
+        N8N_PROTOCOL is always "http". WEBHOOK_URL and N8N_EDITOR_BASE_URL
+        are normalised to end in exactly one ``/``.
     """
     if not external_url:
         return {}
 
     parsed = urlparse(external_url)
     host = parsed.hostname or ""
-    path = parsed.path or "/"
-    if not path.endswith("/"):
-        path += "/"
     normalised = f"{external_url.rstrip('/')}/"
     return {
         "N8N_HOST": host,
         "N8N_PROTOCOL": "http",
         "N8N_PORT": N8N_INTERNAL_PORT,
-        "N8N_PATH": path,
         "WEBHOOK_URL": normalised,
         "N8N_EDITOR_BASE_URL": normalised,
     }

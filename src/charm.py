@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import logging
 import secrets
+import socket
 
 import ops
 from charms.data_platform_libs.v0.data_interfaces import DatabaseRequires
-from charms.traefik_k8s.v2.ingress import IngressPerAppRequirer
+from charms.traefik_k8s.v0.traefik_route import TraefikRouteRequirer
 from ops import main, pebble
 from ops.charm import CharmBase
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
@@ -39,15 +40,12 @@ class N8nK8sCharm(CharmBase):
             relation_name=DB_RELATION_NAME,
             database_name=DATABASE_NAME,
         )
-        self.ingress = IngressPerAppRequirer(
+        self.ingress = TraefikRouteRequirer(
             self,
-            relation_name=INGRESS_RELATION_NAME,
-            port=N8N_PORT,
-            # Strip prefix at traefik; N8N_PATH tells n8n its public mount so emitted URLs keep it.
-            strip_prefix=True,
+            self.model.get_relation(INGRESS_RELATION_NAME),
+            INGRESS_RELATION_NAME,
         )
         self.framework.observe(self.ingress.on.ready, self._on_ingress_changed)
-        self.framework.observe(self.ingress.on.revoked, self._on_ingress_changed)
         self.framework.observe(self.on[INGRESS_RELATION_NAME].relation_broken, self._on_ingress_changed)
         self.framework.observe(self.on.install, self._on_install)
         self.framework.observe(self.on.config_changed, self._on_config_changed)
@@ -162,6 +160,7 @@ class N8nK8sCharm(CharmBase):
                 self.unit.status = WaitingStatus("waiting for database credentials")
             return
 
+        self._publish_ingress_config()
         url_env = self._url_env()
         if url_env is None:
             if self.model.get_relation(INGRESS_RELATION_NAME) is None:
@@ -213,10 +212,42 @@ class N8nK8sCharm(CharmBase):
 
     def _url_env(self) -> dict | None:
         """Return the URL env-var dict for n8n, or None if ingress isn't ready."""
-        url = self.ingress.url
-        if not url:
+        external_host = self.ingress.external_host
+        scheme = self.ingress.scheme
+        if not external_host or not scheme:
             return None
-        return build_url_env(url)
+        return build_url_env(f"{scheme}://{external_host}/")
+
+    def _publish_ingress_config(self) -> None:
+        """Submit n8n's Traefik routing config; no-op until traefik shares external_host."""
+        if not self.unit.is_leader() or not self.ingress.is_ready():
+            return
+        external_host = self.ingress.external_host
+        if not external_host:
+            return
+        router_name = f"juju-{self.model.name}-{self.app.name}"
+        service_name = f"{router_name}-service"
+        config = {
+            "http": {
+                "routers": {
+                    router_name: {
+                        "entryPoints": ["web"],
+                        "service": service_name,
+                        # Host-based routing keeps the public URL rooted (no per-app path prefix);
+                        # operator picks the hostname via traefik-k8s's `external_hostname` config.
+                        "rule": f"Host(`{external_host}`)",
+                    },
+                },
+                "services": {
+                    service_name: {
+                        "loadBalancer": {
+                            "servers": [{"url": f"http://{socket.getfqdn()}:{N8N_PORT}"}],
+                        },
+                    },
+                },
+            },
+        }
+        self.ingress.submit_to_traefik(config)
 
 
 if __name__ == "__main__":  # pragma: no cover
