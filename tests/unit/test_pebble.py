@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pebble import build_layer
+from pebble import build_layer, build_url_env
 
 DB_ENV = {
     "DB_TYPE": "postgresdb",
@@ -57,3 +57,47 @@ def test_build_layer_service_has_replace_override():
     assert layer["services"]["n8n"]["override"] == "replace"
     assert layer["checks"]["live"]["override"] == "replace"
     assert layer["checks"]["ready"]["override"] == "replace"
+
+
+def test_build_url_env_returns_empty_for_none():
+    assert build_url_env(None) == {}
+
+
+def test_build_url_env_returns_empty_for_empty_string():
+    assert build_url_env("") == {}
+
+
+def test_build_url_env_extracts_host_protocol_port():
+    env = build_url_env("http://n8n.example.com/")
+
+    assert env["N8N_HOST"] == "n8n.example.com"
+    assert env["N8N_PROTOCOL"] == "http"
+    assert env["N8N_PORT"] == "5678"
+
+
+def test_build_url_env_normalises_trailing_slash():
+    without_slash = build_url_env("http://n8n.example.com")
+    with_slash = build_url_env("http://n8n.example.com/")
+
+    assert without_slash["WEBHOOK_URL"] == "http://n8n.example.com/"
+    assert without_slash["N8N_EDITOR_BASE_URL"] == "http://n8n.example.com/"
+    assert with_slash["WEBHOOK_URL"] == "http://n8n.example.com/"
+    assert with_slash["N8N_EDITOR_BASE_URL"] == "http://n8n.example.com/"
+
+
+def test_build_url_env_returns_all_five_keys():
+    env = build_url_env("http://n8n.example.com/")
+
+    assert set(env.keys()) == {
+        "N8N_HOST",
+        "N8N_PROTOCOL",
+        "N8N_PORT",
+        "WEBHOOK_URL",
+        "N8N_EDITOR_BASE_URL",
+    }
+
+
+def test_build_layer_takes_merged_env():
+    layer = build_layer({"FOO": "bar"})
+
+    assert layer["services"]["n8n"]["environment"] == {"FOO": "bar"}
