@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from charms.data_platform_libs.v0.data_interfaces import DatabaseRequires
 from ops import main, pebble
@@ -36,11 +35,10 @@ class N8nK8sCharm(CharmBase):
         self.framework.observe(self.on.install, self._on_install)
         self.framework.observe(self.on.n8n_pebble_ready, self._on_pebble_ready)
         self.framework.observe(self.on.update_status, self._on_update_status)
+        self.framework.observe(self.on[DB_RELATION_NAME].relation_created, self._on_database_changed)
         self.framework.observe(self.database.on.database_created, self._on_database_changed)
         self.framework.observe(self.database.on.endpoints_changed, self._on_database_changed)
-        self.framework.observe(
-            self.on[DB_RELATION_NAME].relation_broken, self._on_database_broken
-        )
+        self.framework.observe(self.on[DB_RELATION_NAME].relation_broken, self._on_database_broken)
 
     def _on_install(self, _event) -> None:
         self._reconcile()
@@ -88,7 +86,7 @@ class N8nK8sCharm(CharmBase):
         except pebble.Error:
             logger.debug("ready check not yet registered")
 
-    def _db_env(self) -> Optional[dict]:
+    def _db_env(self) -> dict | None:
         """Return the Postgres env-var dict for n8n, or None if not ready."""
         rel = self.model.get_relation(DB_RELATION_NAME)
         if rel is None:

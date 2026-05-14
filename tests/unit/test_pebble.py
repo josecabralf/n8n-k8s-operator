@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pebble import build_layer
 
-
 DB_ENV = {
     "DB_TYPE": "postgresdb",
     "DB_POSTGRESDB_HOST": "postgres.example",

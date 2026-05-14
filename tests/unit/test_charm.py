@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
+from ops.model import ActiveStatus, BlockedStatus, WaitingStatus
 from ops.pebble import CheckStatus
 from ops.testing import Harness
 
