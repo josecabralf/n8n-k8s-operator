@@ -122,11 +122,29 @@ def test_both_relations_ready_writes_full_env(harness):
     assert env["N8N_HOST"] == "n8n.example.com"
     assert env["N8N_PROTOCOL"] == "http"
     assert env["N8N_PORT"] == "5678"
+    assert env["N8N_PATH"] == "/"
     assert env["WEBHOOK_URL"] == "http://n8n.example.com/"
     assert env["N8N_EDITOR_BASE_URL"] == "http://n8n.example.com/"
     assert "N8N_ENCRYPTION_KEY" in env and env["N8N_ENCRYPTION_KEY"]
     assert plan["checks"]["live"]["http"]["url"].endswith("/healthz")
     assert plan["checks"]["ready"]["http"]["url"].endswith("/healthz/readiness")
+
+
+def test_ingress_with_path_prefix_sets_n8n_path(harness):
+    _begin(harness)
+    harness.container_pebble_ready(CONTAINER)
+    db_rel = harness.add_relation(DB_RELATION, "postgresql-k8s")
+    harness.update_relation_data(db_rel, "postgresql-k8s", DB_DATA)
+    rel_id = harness.add_relation(INGRESS_RELATION, INGRESS_REMOTE)
+    harness.update_relation_data(
+        rel_id,
+        INGRESS_REMOTE,
+        {"ingress": json.dumps({"url": "http://gw.example.com/my-model-my-app/"})},
+    )
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert env["N8N_PATH"] == "/my-model-my-app/"
+    assert env["WEBHOOK_URL"] == "http://gw.example.com/my-model-my-app/"
 
 
 def test_active_status_once_ready_check_is_up(harness, monkeypatch):
