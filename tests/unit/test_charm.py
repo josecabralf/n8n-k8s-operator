@@ -453,6 +453,47 @@ def test_status_maintenance_when_probe_inconclusive(harness):
     assert harness.charm.unit.status == MaintenanceStatus(STATUS_WAITING_N8N)
 
 
+def test_pebble_check_recovered_retriggers_reconcile(harness, monkeypatch):
+    # Land in the stuck waiting-for-n8n state (autouse probe = None).
+    _fully_ready(harness)
+    assert harness.charm.unit.status == MaintenanceStatus(STATUS_WAITING_N8N)
+
+    # n8n has now bound: probe succeeds and the ready check is UP.
+    _patch_probe(monkeypatch, True)
+    container = harness.charm.unit.get_container(CONTAINER)
+
+    class _Check:
+        status = CheckStatus.UP
+
+    monkeypatch.setattr(container, "get_check", lambda _name: _Check())
+
+    # Fire the platform event alone (no update-status) and assert the status flips.
+    harness.charm.on[CONTAINER].pebble_check_recovered.emit(container, "ready")
+    assert harness.charm.unit.status == ActiveStatus()
+
+
+def test_pebble_check_failed_retriggers_reconcile(harness, monkeypatch):
+    # Reach ActiveStatus first.
+    _patch_probe(monkeypatch, True)
+    _fully_ready(harness)
+    container = harness.charm.unit.get_container(CONTAINER)
+
+    class _UpCheck:
+        status = CheckStatus.UP
+
+    monkeypatch.setattr(container, "get_check", lambda _name: _UpCheck())
+    harness.charm.on.update_status.emit()
+    assert harness.charm.unit.status == ActiveStatus()
+
+    # Now the ready check goes DOWN; check-failed alone must flip status.
+    class _DownCheck:
+        status = CheckStatus.DOWN
+
+    monkeypatch.setattr(container, "get_check", lambda _name: _DownCheck())
+    harness.charm.on[CONTAINER].pebble_check_failed.emit(container, "ready")
+    assert harness.charm.unit.status == MaintenanceStatus(STATUS_WAITING_N8N)
+
+
 def test_create_admin_action_fails_when_probe_finds_admin(harness, monkeypatch):
     _patch_probe(monkeypatch, True)
     _fully_ready(harness)

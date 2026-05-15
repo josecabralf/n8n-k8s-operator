@@ -56,6 +56,8 @@ class N8nK8sCharm(CharmBase):
         self.framework.observe(self.on.install, self._on_install)
         self.framework.observe(self.on.config_changed, self._on_config_changed)
         self.framework.observe(self.on.n8n_pebble_ready, self._on_pebble_ready)
+        self.framework.observe(self.on.n8n_pebble_check_recovered, self._on_pebble_check_recovered)
+        self.framework.observe(self.on.n8n_pebble_check_failed, self._on_pebble_check_failed)
         self.framework.observe(self.on.update_status, self._on_update_status)
         self.framework.observe(self.on.secret_changed, self._on_secret_changed)
         self.framework.observe(self.on[PEER_RELATION_NAME].relation_created, self._on_peer_created)
@@ -74,6 +76,12 @@ class N8nK8sCharm(CharmBase):
         self._reconcile()
 
     def _on_pebble_ready(self, _event) -> None:
+        self._reconcile()
+
+    def _on_pebble_check_recovered(self, _event) -> None:
+        self._reconcile()
+
+    def _on_pebble_check_failed(self, _event) -> None:
         self._reconcile()
 
     def _on_update_status(self, _event) -> None:
