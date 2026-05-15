@@ -3,13 +3,34 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from urllib.parse import urlparse
 
 from ops.pebble import LayerDict
 
 N8N_URL = "http://localhost:5678"
 
 
-def build_layer(db_env: Mapping[str, str], encryption_key: str = "") -> LayerDict:
+def build_url_env(external_url: str) -> dict[str, str]:
+    """Return n8n env vars derived from an external URL.
+
+    N8N_PROTOCOL is fixed to "http" because TLS terminates at the
+    ingress; n8n listens plaintext in-pod.
+    """
+    parsed = urlparse(external_url)
+    return {
+        "N8N_HOST": parsed.hostname or "",
+        "N8N_PROTOCOL": "http",
+        "N8N_PORT": "5678",
+        "WEBHOOK_URL": external_url,
+        "N8N_EDITOR_BASE_URL": external_url,
+    }
+
+
+def build_layer(
+    db_env: Mapping[str, str],
+    encryption_key: str = "",
+    url_env: Mapping[str, str] | None = None,
+) -> LayerDict:
     """Return a Pebble layer dict that runs n8n with the given DB env vars.
 
     Args:
@@ -30,6 +51,8 @@ def build_layer(db_env: Mapping[str, str], encryption_key: str = "") -> LayerDic
         check on /healthz and a ready HTTP check on /healthz/readiness.
     """
     environment: dict[str, str] = dict(db_env)
+    if url_env:
+        environment.update(url_env)
     if encryption_key:
         environment["N8N_ENCRYPTION_KEY"] = encryption_key
 
