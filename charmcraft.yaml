@@ -37,6 +37,9 @@ requires:
   postgresql:
     interface: postgresql_client
     limit: 1
+  traefik-route:
+    interface: traefik_route
+    limit: 1
 
 config:
   options:
