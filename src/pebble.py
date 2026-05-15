@@ -30,6 +30,7 @@ def build_layer(
     db_env: Mapping[str, str],
     encryption_key: str = "",
     url_env: Mapping[str, str] | None = None,
+    binary_data_mode: str | None = None,
 ) -> LayerDict:
     """Return a Pebble layer dict that runs n8n with the given DB env vars.
 
@@ -45,6 +46,14 @@ def build_layer(
             layer entirely; this default exists only to keep the
             signature backwards-compatible for callers that have not
             yet been updated.
+        url_env: Optional mapping of n8n URL-related env vars (typically
+            produced by :func:`build_url_env`) merged into the service
+            environment. When ``None`` no URL vars are emitted.
+        binary_data_mode: If set, written as
+            ``N8N_DEFAULT_BINARY_DATA_MODE``. Use ``"filesystem"`` when
+            the binary-data storage is attached, ``"s3"`` when the s3
+            relation is wired up. When ``None``, the variable is omitted
+            and n8n falls back to in-DB storage.
 
     Returns:
         A Pebble LayerDict with one service (``n8n``) plus an alive HTTP
@@ -55,6 +64,8 @@ def build_layer(
         environment.update(url_env)
     if encryption_key:
         environment["N8N_ENCRYPTION_KEY"] = encryption_key
+    if binary_data_mode:
+        environment["N8N_DEFAULT_BINARY_DATA_MODE"] = binary_data_mode
 
     return {
         "summary": "n8n workload layer",
