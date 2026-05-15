@@ -9,6 +9,7 @@ import secrets
 import bcrypt
 import ops
 from charms.data_platform_libs.v0.data_interfaces import DatabaseRequires
+from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 from ops import main, pebble
 from ops.charm import CharmBase
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 CONTAINER_NAME = "n8n"
 SERVICE_NAME = "n8n"
 DB_RELATION_NAME = "postgresql"
+METRICS_RELATION_NAME = "metrics-endpoint"
 DATABASE_NAME = "n8n"
 N8N_PORT = 5678
 
@@ -58,6 +60,14 @@ class N8nK8sCharm(CharmBase):
         self.framework.observe(self.on.get_encryption_key_action, self._on_get_encryption_key_action)
         self.framework.observe(self.on.create_admin_action, self._on_create_admin_action)
         self._ingress = IngressRelation(self, on_change=self._reconcile)
+        self._metrics = MetricsEndpointProvider(
+            self,
+            relation_name=METRICS_RELATION_NAME,
+            jobs=[{"static_configs": [{"targets": [f"*:{N8N_PORT}"]}]}],
+            refresh_event=self.on.config_changed,
+        )
+        self.framework.observe(self.on[METRICS_RELATION_NAME].relation_created, self._on_metrics_changed)
+        self.framework.observe(self.on[METRICS_RELATION_NAME].relation_broken, self._on_metrics_changed)
 
     def _on_install(self, _event) -> None:
         self._reconcile()
@@ -78,6 +88,9 @@ class N8nK8sCharm(CharmBase):
         self._reconcile()
 
     def _on_database_changed(self, _event) -> None:
+        self._reconcile()
+
+    def _on_metrics_changed(self, _event) -> None:
         self._reconcile()
 
     def _on_database_broken(self, _event) -> None:
@@ -218,9 +231,10 @@ class N8nK8sCharm(CharmBase):
             return
 
         self.unit.status = MaintenanceStatus("starting n8n")
+        metrics_env = {"N8N_METRICS": "true"} if self.model.get_relation(METRICS_RELATION_NAME) is not None else None
         container.add_layer(
             CONTAINER_NAME,
-            build_layer(db_env, key, url_env=build_url_env(url)),
+            build_layer(db_env, key, url_env=build_url_env(url), metrics_env=metrics_env),
             combine=True,
         )
         container.replan()
