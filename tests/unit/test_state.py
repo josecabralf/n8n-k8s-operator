@@ -64,3 +64,32 @@ def test_setter_raises_without_peer_relation():
             state.encryption_key_secret_id = "secret:xyz"
     finally:
         harness.cleanup()
+
+
+def test_owner_bootstrapped_defaults_false():
+    harness = _harness_with_peer()
+    try:
+        state = CharmState(harness.charm)
+        assert state.owner_bootstrapped is False
+    finally:
+        harness.cleanup()
+
+
+def test_owner_bootstrapped_roundtrip():
+    harness = _harness_with_peer()
+    try:
+        state = CharmState(harness.charm)
+        state.owner_bootstrapped = True
+        assert state.owner_bootstrapped is True
+    finally:
+        harness.cleanup()
+
+
+def test_owner_bootstrapped_setter_raises_without_peer():
+    harness = _harness_without_peer()
+    try:
+        state = CharmState(harness.charm)
+        with pytest.raises(RuntimeError):
+            state.owner_bootstrapped = True
+    finally:
+        harness.cleanup()
