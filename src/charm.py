@@ -12,7 +12,8 @@ from ops import main, pebble
 from ops.charm import CharmBase
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
 
-from pebble import build_layer
+from pebble import build_layer, build_url_env
+from relations.ingress import IngressRelation
 from state import PEER_RELATION_NAME, CharmState
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,7 @@ class N8nK8sCharm(CharmBase):
         self.framework.observe(self.database.on.endpoints_changed, self._on_database_changed)
         self.framework.observe(self.on[DB_RELATION_NAME].relation_broken, self._on_database_broken)
         self.framework.observe(self.on.get_encryption_key_action, self._on_get_encryption_key_action)
+        self._ingress = IngressRelation(self, on_change=self._reconcile)
 
     def _on_install(self, _event) -> None:
         self._reconcile()
@@ -147,13 +149,26 @@ class N8nK8sCharm(CharmBase):
                 self.unit.status = WaitingStatus("waiting for database credentials")
             return
 
+        if not self._ingress.is_related():
+            self.unit.status = BlockedStatus("waiting for ingress relation")
+            return
+        url = self._ingress.url
+        if not url:
+            self.unit.status = WaitingStatus("waiting for ingress url")
+            return
+        self._ingress.publish_route()
+
         container = self.unit.get_container(CONTAINER_NAME)
         if not container.can_connect():
             self.unit.status = MaintenanceStatus("waiting for pebble")
             return
 
         self.unit.status = MaintenanceStatus("starting n8n")
-        container.add_layer(CONTAINER_NAME, build_layer(db_env, key), combine=True)
+        container.add_layer(
+            CONTAINER_NAME,
+            build_layer(db_env, key, url_env=build_url_env(url)),
+            combine=True,
+        )
         container.replan()
 
         try:
