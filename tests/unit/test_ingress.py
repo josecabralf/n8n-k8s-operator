@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import pytest
 import yaml
-from ops.model import BlockedStatus, WaitingStatus
+from ops.model import ActiveStatus, BlockedStatus
+from ops.pebble import CheckStatus
 from ops.testing import Harness
+
+from charm import (
+    STATUS_AWAITING_INGRESS_URL,
+    STATUS_AWAITING_OWNER,
+    N8nK8sCharm,
+)
 
 DB_RELATION = "postgresql"
 PEER_RELATION = "n8n-peers"
@@ -39,12 +47,57 @@ def test_blocked_without_ingress_even_with_postgres(harness):
     assert harness.charm.unit.status == BlockedStatus("waiting for ingress relation")
 
 
-def test_waiting_when_ingress_joined_without_host_yet(harness):
+@pytest.fixture(autouse=True)
+def _default_probe_inconclusive(monkeypatch):
+    """Default the workload probe to None so tests never touch a real socket."""
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: None)
+
+
+def _patch_probe(monkeypatch, value):
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: value)
+
+
+def _ready_check(monkeypatch, container) -> None:
+    class _Check:
+        status = CheckStatus.UP
+
+    monkeypatch.setattr(container, "get_check", lambda _name: _Check())
+
+
+def test_starts_n8n_without_url_env_when_ingress_has_no_host_yet(harness, monkeypatch):
+    """When traefik is related but has not published external_host yet, the
+    charm still builds a pebble layer and starts n8n; only the URL-derived
+    env vars are omitted. Status flips to Active with an informational hint."""
+    _patch_probe(monkeypatch, True)
     _begin(harness)
     harness.container_pebble_ready(CONTAINER)
     _add_postgres(harness)
     harness.add_relation(INGRESS_RELATION, TRAEFIK_APP)
-    assert harness.charm.unit.status == WaitingStatus("waiting for ingress url")
+
+    container = harness.charm.unit.get_container(CONTAINER)
+    _ready_check(monkeypatch, container)
+    harness.charm.on.update_status.emit()
+
+    assert harness.charm.unit.status == ActiveStatus(STATUS_AWAITING_INGRESS_URL)
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert "WEBHOOK_URL" not in env
+    assert "N8N_EDITOR_BASE_URL" not in env
+    assert "N8N_HOST" not in env
+
+
+def test_url_hint_combines_with_owner_hint(harness, monkeypatch):
+    _patch_probe(monkeypatch, False)
+    _begin(harness)
+    harness.container_pebble_ready(CONTAINER)
+    _add_postgres(harness)
+    harness.add_relation(INGRESS_RELATION, TRAEFIK_APP)
+
+    container = harness.charm.unit.get_container(CONTAINER)
+    _ready_check(monkeypatch, container)
+    harness.charm.on.update_status.emit()
+
+    assert harness.charm.unit.status == ActiveStatus(f"{STATUS_AWAITING_OWNER}; {STATUS_AWAITING_INGRESS_URL}")
 
 
 def test_active_when_host_and_scheme_published_and_env_vars_in_plan(harness):

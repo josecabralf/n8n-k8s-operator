@@ -35,6 +35,7 @@ OWNER_PROBE_PATH = "/rest/settings"
 OWNER_PROBE_TIMEOUT_S = 3
 
 STATUS_AWAITING_OWNER = "awaiting admin: run create-admin action or visit /setup"
+STATUS_AWAITING_INGRESS_URL = "awaiting ingress url — webhooks unconfigured"
 STATUS_WAITING_N8N = "waiting for n8n to start"
 ERR_ALREADY_BOOTSTRAPPED = "owner already exists; use n8n UI to manage users"
 ERR_NOT_LEADER = "create-admin must run on the leader unit"
@@ -221,10 +222,8 @@ class N8nK8sCharm(CharmBase):
             self.unit.status = BlockedStatus("waiting for ingress relation")
             return
         url = self._ingress.url
-        if not url:
-            self.unit.status = WaitingStatus("waiting for ingress url")
-            return
-        self._ingress.publish_route()
+        if url:
+            self._ingress.publish_route()
 
         container = self.unit.get_container(CONTAINER_NAME)
         if not container.can_connect():
@@ -232,9 +231,10 @@ class N8nK8sCharm(CharmBase):
             return
 
         self.unit.status = MaintenanceStatus("starting n8n")
+        url_env = build_url_env(url) if url else None
         container.add_layer(
             CONTAINER_NAME,
-            build_layer(db_env, key, url_env=build_url_env(url), tier1_env=tier1_env),
+            build_layer(db_env, key, url_env=url_env, tier1_env=tier1_env),
             combine=True,
         )
         container.replan()
@@ -260,10 +260,12 @@ class N8nK8sCharm(CharmBase):
             self.unit.status = MaintenanceStatus(STATUS_WAITING_N8N)
             return
 
-        if owner_exists:
-            self.unit.status = ActiveStatus()
-        else:
-            self.unit.status = ActiveStatus(STATUS_AWAITING_OWNER)
+        hints: list[str] = []
+        if not owner_exists:
+            hints.append(STATUS_AWAITING_OWNER)
+        if not url:
+            hints.append(STATUS_AWAITING_INGRESS_URL)
+        self.unit.status = ActiveStatus("; ".join(hints))
 
     def _probe_owner_setup(self) -> bool | None:
         """Return whether an owner exists on the running n8n instance.
