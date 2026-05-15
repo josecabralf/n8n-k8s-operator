@@ -12,6 +12,7 @@ from state import ENCRYPTION_KEY_SECRET_ID, PEER_RELATION_NAME
 
 DB_RELATION = "postgresql"
 PEER_RELATION = "n8n-peers"
+INGRESS_RELATION = "traefik-route"
 CONTAINER = "n8n"
 APP_NAME = "n8n-k8s"
 
@@ -21,6 +22,8 @@ DB_DATA = {
     "password": "s3cret",
     "database": "n8n",
 }
+
+INGRESS_DATA = {"external_host": "traefik.local", "scheme": "http"}
 
 EXPECTED_DB_ENV = {
     "DB_TYPE": "postgresdb",
@@ -35,6 +38,13 @@ EXPECTED_DB_ENV = {
 def _begin(harness: Harness) -> None:
     harness.add_relation(PEER_RELATION, APP_NAME)
     harness.begin_with_initial_hooks()
+
+
+def _add_ingress(harness: Harness, data: dict | None = INGRESS_DATA) -> int:
+    rel_id = harness.add_relation(INGRESS_RELATION, "traefik-k8s")
+    if data:
+        harness.update_relation_data(rel_id, "traefik-k8s", data)
+    return rel_id
 
 
 def _stored_secret_id(harness: Harness) -> str | None:
@@ -63,6 +73,7 @@ def test_relation_added_but_no_creds_yields_waiting(harness):
 def test_database_created_writes_pebble_layer_with_db_env_and_encryption_key(harness):
     _begin(harness)
     harness.container_pebble_ready(CONTAINER)
+    _add_ingress(harness)
     rel_id = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(rel_id, "postgresql-k8s", DB_DATA)
 
@@ -78,6 +89,7 @@ def test_database_created_writes_pebble_layer_with_db_env_and_encryption_key(har
 def test_active_status_once_ready_check_is_up(harness, monkeypatch):
     _begin(harness)
     harness.container_pebble_ready(CONTAINER)
+    _add_ingress(harness)
     rel_id = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(rel_id, "postgresql-k8s", DB_DATA)
 
@@ -94,6 +106,7 @@ def test_active_status_once_ready_check_is_up(harness, monkeypatch):
 def test_endpoints_changed_updates_env(harness):
     _begin(harness)
     harness.container_pebble_ready(CONTAINER)
+    _add_ingress(harness)
     rel_id = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(rel_id, "postgresql-k8s", DB_DATA)
     harness.update_relation_data(rel_id, "postgresql-k8s", {"endpoints": "10.9.9.9:5433"})
@@ -106,6 +119,7 @@ def test_endpoints_changed_updates_env(harness):
 def test_relation_broken_returns_to_blocked(harness):
     _begin(harness)
     harness.container_pebble_ready(CONTAINER)
+    _add_ingress(harness)
     rel_id = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(rel_id, "postgresql-k8s", DB_DATA)
 
@@ -135,6 +149,7 @@ def test_install_creates_app_secret_once(harness):
 def test_pebble_env_contains_encryption_key(harness):
     _begin(harness)
     harness.container_pebble_ready(CONTAINER)
+    _add_ingress(harness)
     rel_id = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(rel_id, "postgresql-k8s", DB_DATA)
 
@@ -149,6 +164,7 @@ def test_pebble_env_contains_encryption_key(harness):
 def test_config_override_with_granted_secret(harness):
     _begin(harness)
     harness.container_pebble_ready(CONTAINER)
+    _add_ingress(harness)
     rel_id = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(rel_id, "postgresql-k8s", DB_DATA)
 
