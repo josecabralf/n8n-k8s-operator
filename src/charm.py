@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import secrets
 
+import bcrypt
 import ops
 from charms.data_platform_libs.v0.data_interfaces import DatabaseRequires
 from ops import main, pebble
@@ -26,6 +27,12 @@ N8N_PORT = 5678
 
 ENCRYPTION_KEY_SECRET_LABEL = "n8n-encryption-key"
 ENCRYPTION_KEY_CONFIG = "encryption-key"
+
+STATUS_NEEDS_OWNER = "no admin user; run create-admin action"
+ERR_ALREADY_BOOTSTRAPPED = "owner already exists; use n8n UI to manage users"
+ERR_NOT_LEADER = "create-admin must run on the leader unit"
+ERR_PEER_NOT_READY = "peer relation not yet joined; retry"
+ERR_CONTAINER_NOT_READY = "n8n container not yet connectable"
 
 
 class N8nK8sCharm(CharmBase):
@@ -49,6 +56,7 @@ class N8nK8sCharm(CharmBase):
         self.framework.observe(self.database.on.endpoints_changed, self._on_database_changed)
         self.framework.observe(self.on[DB_RELATION_NAME].relation_broken, self._on_database_broken)
         self.framework.observe(self.on.get_encryption_key_action, self._on_get_encryption_key_action)
+        self.framework.observe(self.on.create_admin_action, self._on_create_admin_action)
         self._ingress = IngressRelation(self, on_change=self._reconcile)
 
     def _on_install(self, _event) -> None:
@@ -87,6 +95,52 @@ class N8nK8sCharm(CharmBase):
             event.fail(msg or "encryption key not yet available")
             return
         event.set_results({"encryption-key": key})
+
+    def _on_create_admin_action(self, event: ops.ActionEvent) -> None:
+        if not self.unit.is_leader():
+            event.fail(ERR_NOT_LEADER)
+            return
+        state = CharmState(self)
+        if state.peer_relation is None:
+            event.fail(ERR_PEER_NOT_READY)
+            return
+        if state.owner_bootstrapped:
+            event.fail(ERR_ALREADY_BOOTSTRAPPED)
+            return
+
+        container = self.unit.get_container(CONTAINER_NAME)
+        if not container.can_connect():
+            event.fail(ERR_CONTAINER_NOT_READY)
+            return
+
+        email = event.params["email"]
+        first_name = event.params["first-name"]
+        last_name = event.params["last-name"]
+        password_hash = bcrypt.hashpw(event.params["password"].encode(), bcrypt.gensalt(rounds=10)).decode()
+
+        container.add_layer(
+            "n8n-bootstrap",
+            {
+                "summary": "n8n owner bootstrap",
+                "services": {
+                    "n8n": {
+                        "override": "merge",
+                        "environment": {
+                            "N8N_INSTANCE_OWNER_MANAGED_BY_ENV": "true",
+                            "N8N_INSTANCE_OWNER_EMAIL": email,
+                            "N8N_INSTANCE_OWNER_FIRST_NAME": first_name,
+                            "N8N_INSTANCE_OWNER_LAST_NAME": last_name,
+                            "N8N_INSTANCE_OWNER_PASSWORD_HASH": password_hash,
+                        },
+                    }
+                },
+            },
+            combine=True,
+        )
+        container.replan()
+
+        state.owner_bootstrapped = True
+        event.set_results({"created": True, "email": email})
 
     def _effective_encryption_key(self) -> tuple[str | None, str | None]:
         """Return (key, blocked_msg).
@@ -170,6 +224,11 @@ class N8nK8sCharm(CharmBase):
             combine=True,
         )
         container.replan()
+
+        state = CharmState(self)
+        if not state.owner_bootstrapped:
+            self.unit.status = BlockedStatus(STATUS_NEEDS_OWNER)
+            return
 
         try:
             ready = container.get_check("ready")
