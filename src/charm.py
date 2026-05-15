@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import secrets
+import urllib.error
+import urllib.request
 
 import bcrypt
 import ops
@@ -28,7 +31,11 @@ N8N_PORT = 5678
 ENCRYPTION_KEY_SECRET_LABEL = "n8n-encryption-key"
 ENCRYPTION_KEY_CONFIG = "encryption-key"
 
-STATUS_NEEDS_OWNER = "no admin user; run create-admin action"
+OWNER_PROBE_PATH = "/rest/settings"
+OWNER_PROBE_TIMEOUT_S = 3
+
+STATUS_AWAITING_OWNER = "awaiting admin: run create-admin action or visit /setup"
+STATUS_WAITING_N8N = "waiting for n8n to start"
 ERR_ALREADY_BOOTSTRAPPED = "owner already exists; use n8n UI to manage users"
 ERR_NOT_LEADER = "create-admin must run on the leader unit"
 ERR_PEER_NOT_READY = "peer relation not yet joined; retry"
@@ -104,13 +111,15 @@ class N8nK8sCharm(CharmBase):
         if state.peer_relation is None:
             event.fail(ERR_PEER_NOT_READY)
             return
-        if state.owner_bootstrapped:
-            event.fail(ERR_ALREADY_BOOTSTRAPPED)
-            return
 
         container = self.unit.get_container(CONTAINER_NAME)
         if not container.can_connect():
             event.fail(ERR_CONTAINER_NOT_READY)
+            return
+
+        probed = self._probe_owner_setup()
+        if probed is True or (probed is None and state.owner_bootstrapped):
+            event.fail(ERR_ALREADY_BOOTSTRAPPED)
             return
 
         email = event.params["email"]
@@ -231,16 +240,49 @@ class N8nK8sCharm(CharmBase):
         container.replan()
 
         state = CharmState(self)
-        if not state.owner_bootstrapped:
-            self.unit.status = BlockedStatus(STATUS_NEEDS_OWNER)
+        if state.owner_bootstrapped:
+            owner_exists: bool | None = True
+        else:
+            owner_exists = self._probe_owner_setup()
+            if owner_exists is True and state.peer_relation is not None and self.unit.is_leader():
+                state.owner_bootstrapped = True
+
+        if owner_exists is None:
+            self.unit.status = MaintenanceStatus(STATUS_WAITING_N8N)
             return
 
         try:
-            ready = container.get_check("ready")
-            if ready.status == pebble.CheckStatus.UP:
-                self.unit.status = ActiveStatus()
+            ready = container.get_check("ready").status == pebble.CheckStatus.UP
         except pebble.Error:
-            logger.debug("ready check not yet registered")
+            ready = False
+
+        if not ready:
+            self.unit.status = MaintenanceStatus(STATUS_WAITING_N8N)
+            return
+
+        if owner_exists:
+            self.unit.status = ActiveStatus()
+        else:
+            self.unit.status = ActiveStatus(STATUS_AWAITING_OWNER)
+
+    def _probe_owner_setup(self) -> bool | None:
+        """Return whether an owner exists on the running n8n instance.
+
+        True  → owner is set up (any path: env-var, /setup UI, etc.).
+        False → no owner yet.
+        None  → could not determine (n8n not listening, bad response).
+        """
+        url = f"http://localhost:{N8N_PORT}{OWNER_PROBE_PATH}"
+        try:
+            with urllib.request.urlopen(url, timeout=OWNER_PROBE_TIMEOUT_S) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            data = payload.get("data", payload)
+            user_mgmt = data["userManagement"]
+            show_setup = user_mgmt["showSetupOnFirstLoad"]
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError, TypeError) as exc:
+            logger.debug("owner-setup probe inconclusive: %s", exc)
+            return None
+        return not bool(show_setup)
 
     def _db_env(self) -> dict | None:
         """Return the Postgres env-var dict for n8n, or None if not ready."""

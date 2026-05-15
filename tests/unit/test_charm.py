@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import pytest
-from ops.model import ActiveStatus, BlockedStatus, WaitingStatus
+from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
 from ops.pebble import CheckStatus
 from ops.testing import ActionFailed, Harness
 
-from charm import N8nK8sCharm
+from charm import (
+    STATUS_AWAITING_OWNER,
+    STATUS_WAITING_N8N,
+    N8nK8sCharm,
+)
 from state import ENCRYPTION_KEY_SECRET_ID, OWNER_BOOTSTRAPPED, PEER_RELATION_NAME
 
 DB_RELATION = "postgresql"
@@ -57,6 +61,16 @@ def _set_owner_bootstrapped(harness: Harness, value: bool = True) -> None:
     rel = harness.charm.model.get_relation(PEER_RELATION_NAME)
     assert rel is not None
     rel.data[harness.charm.app][OWNER_BOOTSTRAPPED] = "true" if value else ""
+
+
+def _patch_probe(monkeypatch, value: bool | None) -> None:
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: value)
+
+
+@pytest.fixture(autouse=True)
+def _default_probe_inconclusive(monkeypatch):
+    """Default the workload probe to None so tests never touch a real socket."""
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: None)
 
 
 def _fully_ready(harness: Harness) -> None:
@@ -379,12 +393,21 @@ def test_create_admin_action_fails_when_container_not_connectable():
         harness.cleanup()
 
 
-def test_status_blocks_when_db_ready_but_no_admin(harness):
+def test_status_active_with_hint_when_no_admin(harness, monkeypatch):
+    _patch_probe(monkeypatch, False)
     _fully_ready(harness)
-    assert harness.charm.unit.status == BlockedStatus("no admin user; run create-admin action")
+    container = harness.charm.unit.get_container(CONTAINER)
+
+    class _Check:
+        status = CheckStatus.UP
+
+    monkeypatch.setattr(container, "get_check", lambda _name: _Check())
+    harness.charm.on.update_status.emit()
+    assert harness.charm.unit.status == ActiveStatus(STATUS_AWAITING_OWNER)
 
 
 def test_status_active_after_action(harness, monkeypatch):
+    _patch_probe(monkeypatch, False)
     _fully_ready(harness)
     container = harness.charm.unit.get_container(CONTAINER)
 
@@ -401,5 +424,61 @@ def test_status_active_after_action(harness, monkeypatch):
             "last-name": "Admin",
         },
     )
+    # After the action sets the cache flag, the next reconcile hits the
+    # fast path and skips the probe — so the clean ActiveStatus is reached
+    # regardless of the patched probe result.
     harness.charm.on.update_status.emit()
     assert harness.charm.unit.status == ActiveStatus()
+
+
+def test_status_active_when_probe_finds_manual_admin(harness, monkeypatch):
+    _patch_probe(monkeypatch, True)
+    _fully_ready(harness)
+    container = harness.charm.unit.get_container(CONTAINER)
+
+    class _Check:
+        status = CheckStatus.UP
+
+    monkeypatch.setattr(container, "get_check", lambda _name: _Check())
+    harness.charm.on.update_status.emit()
+
+    assert harness.charm.unit.status == ActiveStatus()
+    rel = harness.charm.model.get_relation(PEER_RELATION_NAME)
+    assert rel.data[harness.charm.app][OWNER_BOOTSTRAPPED] == "true"
+
+
+def test_status_maintenance_when_probe_inconclusive(harness):
+    # autouse fixture already pins probe to None.
+    _fully_ready(harness)
+    assert harness.charm.unit.status == MaintenanceStatus(STATUS_WAITING_N8N)
+
+
+def test_create_admin_action_fails_when_probe_finds_admin(harness, monkeypatch):
+    _patch_probe(monkeypatch, True)
+    _fully_ready(harness)
+    with pytest.raises(ActionFailed) as exc_info:
+        harness.run_action(
+            "create-admin",
+            params={
+                "email": "ops@example.com",
+                "password": "hunter2",
+                "first-name": "Ops",
+                "last-name": "Admin",
+            },
+        )
+    assert "already exists" in exc_info.value.message
+
+
+def test_create_admin_action_runs_when_probe_inconclusive_and_no_cache(harness):
+    # autouse fixture: probe → None, no peer flag set → action proceeds.
+    _fully_ready(harness)
+    output = harness.run_action(
+        "create-admin",
+        params={
+            "email": "ops@example.com",
+            "password": "hunter2",
+            "first-name": "Ops",
+            "last-name": "Admin",
+        },
+    )
+    assert output.results == {"created": True, "email": "ops@example.com"}
