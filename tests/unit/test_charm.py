@@ -328,9 +328,9 @@ def test_create_admin_action_fails_on_follower():
 def test_create_admin_action_fails_when_container_not_connectable():
     harness = Harness(N8nK8sCharm)
     harness.set_leader(True)
-    harness.set_can_connect(CONTAINER, False)
     harness.add_relation(PEER_RELATION, APP_NAME)
     harness.begin_with_initial_hooks()
+    harness.set_can_connect(CONTAINER, False)
     try:
         with pytest.raises(ActionFailed) as exc_info:
             harness.run_action(
