@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pebble import build_layer, build_url_env
+from pebble import build_layer, build_tier1_env, build_url_env
 
 DB_ENV = {
     "DB_TYPE": "postgresdb",
@@ -147,3 +147,74 @@ def test_build_layer_pebble_checks_still_target_localhost():
     for layer in (layer_no_url, layer_with_url):
         assert "localhost:5678" in layer["checks"]["live"]["http"]["url"]
         assert "localhost:5678" in layer["checks"]["ready"]["http"]["url"]
+
+
+def test_build_tier1_env_defaults_match_n8n_upstream():
+    env, err = build_tier1_env({})
+
+    assert err is None
+    assert env == {
+        "N8N_LOG_LEVEL": "info",
+        "GENERIC_TIMEZONE": "UTC",
+        "TZ": "UTC",
+        "EXECUTIONS_DATA_PRUNE": "false",
+        "EXECUTIONS_DATA_MAX_AGE": "336",
+        "EXECUTIONS_DATA_SAVE_ON_ERROR": "all",
+        "EXECUTIONS_DATA_SAVE_ON_SUCCESS": "all",
+        "EXECUTIONS_DATA_SAVE_ON_PROGRESS": "false",
+        "N8N_USER_MANAGEMENT_DISABLED": "false",
+    }
+
+
+def test_build_tier1_env_log_level_override():
+    env, err = build_tier1_env({"log-level": "debug"})
+
+    assert err is None
+    assert env is not None
+    assert env["N8N_LOG_LEVEL"] == "debug"
+
+
+def test_build_tier1_env_timezone_sets_both_env_vars():
+    env, err = build_tier1_env({"timezone": "Europe/Madrid"})
+
+    assert err is None
+    assert env is not None
+    assert env["GENERIC_TIMEZONE"] == "Europe/Madrid"
+    assert env["TZ"] == "Europe/Madrid"
+
+
+def test_build_tier1_env_invalid_log_level_returns_error():
+    env, err = build_tier1_env({"log-level": "garbage"})
+
+    assert env is None
+    assert err is not None
+    assert err.startswith("invalid log-level 'garbage'")
+
+
+def test_build_tier1_env_invalid_save_on_error_returns_error():
+    env, err = build_tier1_env({"executions-data-save-on-error": "maybe"})
+
+    assert env is None
+    assert err is not None
+    assert "invalid executions-data-save-on-error 'maybe'" in err
+
+
+def test_build_tier1_env_negative_max_age_returns_error():
+    env, err = build_tier1_env({"executions-data-max-age-hours": -1})
+
+    assert env is None
+    assert err == "executions-data-max-age-hours must be >= 0"
+
+
+def test_build_tier1_env_disable_user_registration_true_sets_env():
+    env, err = build_tier1_env({"disable-user-registration": True})
+
+    assert err is None
+    assert env is not None
+    assert env["N8N_USER_MANAGEMENT_DISABLED"] == "true"
+
+
+def test_build_layer_merges_tier1_env():
+    layer = build_layer(DB_ENV, tier1_env={"N8N_LOG_LEVEL": "debug"})
+
+    assert layer["services"]["n8n"]["environment"]["N8N_LOG_LEVEL"] == "debug"

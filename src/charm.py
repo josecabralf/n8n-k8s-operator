@@ -14,7 +14,7 @@ from ops import main, pebble
 from ops.charm import CharmBase
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
 
-from pebble import build_layer, build_url_env
+from pebble import build_layer, build_tier1_env, build_url_env
 from relations.ingress import IngressRelation
 from state import PEER_RELATION_NAME, CharmState
 
@@ -208,6 +208,11 @@ class N8nK8sCharm(CharmBase):
             self.unit.status = WaitingStatus("waiting for encryption key")
             return
 
+        tier1_env, tier1_err = build_tier1_env(self.config)
+        if tier1_err is not None:
+            self.unit.status = BlockedStatus(tier1_err)
+            return
+
         db_env = self._db_env()
         if db_env is None:
             if self.model.get_relation(DB_RELATION_NAME) is None:
@@ -234,7 +239,13 @@ class N8nK8sCharm(CharmBase):
         metrics_env = {"N8N_METRICS": "true"} if self.model.get_relation(METRICS_RELATION_NAME) is not None else None
         container.add_layer(
             CONTAINER_NAME,
-            build_layer(db_env, key, url_env=build_url_env(url), metrics_env=metrics_env),
+            build_layer(
+                db_env,
+                key,
+                url_env=build_url_env(url),
+                tier1_env=tier1_env,
+                metrics_env=metrics_env,
+            ),
             combine=True,
         )
         container.replan()

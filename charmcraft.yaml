@@ -58,6 +58,55 @@ config:
         Intended for migrating from an existing n8n install. Rotation is
         NOT supported in v1 — changing this after deploy bricks every
         credential stored by n8n.
+    log-level:
+      type: string
+      default: info
+      description: |
+        n8n log level. Sets N8N_LOG_LEVEL. Must be one of: debug, info,
+        warn, error. Invalid values block the unit.
+    timezone:
+      type: string
+      default: UTC
+      description: |
+        IANA timezone name. Sets BOTH GENERIC_TIMEZONE (used by n8n
+        scheduling) and TZ (process timezone). Defaults to UTC.
+    executions-data-prune:
+      type: boolean
+      default: false
+      description: |
+        If true, n8n periodically deletes execution data older than
+        executions-data-max-age-hours. Sets EXECUTIONS_DATA_PRUNE.
+    executions-data-max-age-hours:
+      type: int
+      default: 336
+      description: |
+        Maximum age in hours of execution data retained when
+        executions-data-prune is true. Sets EXECUTIONS_DATA_MAX_AGE.
+        Must be >= 0; default 336 (14 days) matches n8n upstream.
+    executions-data-save-on-error:
+      type: string
+      default: all
+      description: |
+        Whether to persist execution data for failed runs. One of
+        "all" or "none". Sets EXECUTIONS_DATA_SAVE_ON_ERROR.
+    executions-data-save-on-success:
+      type: string
+      default: all
+      description: |
+        Whether to persist execution data for successful runs. One of
+        "all" or "none". Sets EXECUTIONS_DATA_SAVE_ON_SUCCESS.
+    executions-data-save-on-progress:
+      type: boolean
+      default: false
+      description: |
+        If true, n8n saves intermediate node data during runs. Sets
+        EXECUTIONS_DATA_SAVE_ON_PROGRESS.
+    disable-user-registration:
+      type: boolean
+      default: false
+      description: |
+        If true, disables n8n public user signup. Sets
+        N8N_USER_MANAGEMENT_DISABLED.
 
 actions:
   get-encryption-key:
