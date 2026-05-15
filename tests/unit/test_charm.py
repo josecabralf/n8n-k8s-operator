@@ -249,6 +249,38 @@ def test_action_fails_when_override_secret_not_granted(harness):
     assert "not granted" in exc_info.value.message
 
 
+# --- Tier 1 typed configs (issue #6) ---
+
+
+def test_config_change_log_level_propagates_to_env(harness):
+    _fully_ready(harness)
+    _set_owner_bootstrapped(harness)
+    harness.update_config({"log-level": "debug"})
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert env["N8N_LOG_LEVEL"] == "debug"
+
+
+def test_config_invalid_log_level_blocks(harness):
+    _fully_ready(harness)
+    _set_owner_bootstrapped(harness)
+    harness.update_config({"log-level": "garbage"})
+
+    assert harness.charm.unit.status == BlockedStatus(
+        "invalid log-level 'garbage'; must be one of: debug, info, warn, error"
+    )
+
+
+def test_config_timezone_sets_both_env_vars(harness):
+    _fully_ready(harness)
+    _set_owner_bootstrapped(harness)
+    harness.update_config({"timezone": "Europe/Madrid"})
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert env["GENERIC_TIMEZONE"] == "Europe/Madrid"
+    assert env["TZ"] == "Europe/Madrid"
+
+
 # --- Owner bootstrap (issue #5) ---
 
 
