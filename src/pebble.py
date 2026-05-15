@@ -92,6 +92,7 @@ def build_layer(
     encryption_key: str = "",
     url_env: Mapping[str, str] | None = None,
     tier1_env: Mapping[str, str] | None = None,
+    metrics_env: Mapping[str, str] | None = None,
 ) -> LayerDict:
     """Return a Pebble layer dict that runs n8n with the given DB env vars.
 
@@ -107,6 +108,16 @@ def build_layer(
             layer entirely; this default exists only to keep the
             signature backwards-compatible for callers that have not
             yet been updated.
+        url_env: Optional mapping of ingress-derived env vars
+            (``N8N_HOST``, ``N8N_PROTOCOL``, ``N8N_PORT``,
+            ``WEBHOOK_URL``, ``N8N_EDITOR_BASE_URL``).
+        tier1_env: Optional mapping of Tier 1 n8n env vars derived from
+            charm config (logging, timezone, executions retention,
+            user-management toggle).
+        metrics_env: Optional mapping of metrics env vars, typically
+            ``{"N8N_METRICS": "true"}`` when the ``metrics-endpoint``
+            relation is present. Omit to leave n8n metrics disabled
+            (n8n default — ``/metrics`` returns 404).
 
     Returns:
         A Pebble LayerDict with one service (``n8n``) plus an alive HTTP
@@ -117,6 +128,8 @@ def build_layer(
         environment.update(tier1_env)
     if url_env:
         environment.update(url_env)
+    if metrics_env:
+        environment.update(metrics_env)
     if encryption_key:
         environment["N8N_ENCRYPTION_KEY"] = encryption_key
 
