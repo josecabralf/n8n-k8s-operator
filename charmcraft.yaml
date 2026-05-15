@@ -33,6 +33,16 @@ peers:
   n8n-peers:
     interface: n8n_peers
 
+storage:
+  binary-data:
+    type: filesystem
+    location: /home/node/.n8n/binaryData
+    description: |
+      Filesystem storage for n8n workflow binary data (file attachments).
+      When attached, n8n switches to filesystem mode; when absent, attachments
+      fall back to in-DB storage (suboptimal — see PRD Decision 8).
+    minimum-size: 1G
+
 requires:
   postgresql:
     interface: postgresql_client
