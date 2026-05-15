@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pebble import build_layer
+from pebble import build_layer, build_url_env
 
 DB_ENV = {
     "DB_TYPE": "postgresdb",
@@ -65,3 +65,69 @@ def test_build_layer_injects_n8n_encryption_key():
 
     environment = layer["services"]["n8n"]["environment"]
     assert environment["N8N_ENCRYPTION_KEY"] == "testkey"
+
+
+def test_build_url_env_returns_five_keys():
+    url_env = build_url_env("http://traefik.local/")
+
+    assert set(url_env.keys()) == {
+        "N8N_HOST",
+        "N8N_PROTOCOL",
+        "N8N_PORT",
+        "WEBHOOK_URL",
+        "N8N_EDITOR_BASE_URL",
+    }
+    assert url_env["N8N_HOST"] == "traefik.local"
+    assert url_env["N8N_PROTOCOL"] == "http"
+    assert url_env["N8N_PORT"] == "5678"
+    assert url_env["WEBHOOK_URL"] == "http://traefik.local/"
+    assert url_env["N8N_EDITOR_BASE_URL"] == "http://traefik.local/"
+
+
+def test_build_url_env_handles_https_scheme():
+    url_env = build_url_env("https://n8n.example.com/")
+
+    assert url_env["N8N_HOST"] == "n8n.example.com"
+    assert url_env["N8N_PROTOCOL"] == "http"
+    assert url_env["WEBHOOK_URL"] == "https://n8n.example.com/"
+    assert url_env["N8N_EDITOR_BASE_URL"] == "https://n8n.example.com/"
+
+
+def test_build_layer_without_url_env_is_unchanged():
+    layer = build_layer({"DB_TYPE": "postgresdb"}, encryption_key="k")
+
+    environment = layer["services"]["n8n"]["environment"]
+    assert environment["DB_TYPE"] == "postgresdb"
+    assert environment["N8N_ENCRYPTION_KEY"] == "k"
+    for key in ("N8N_HOST", "N8N_PROTOCOL", "N8N_PORT", "WEBHOOK_URL", "N8N_EDITOR_BASE_URL"):
+        assert key not in environment
+
+
+def test_build_layer_with_url_env_merges_into_environment():
+    layer = build_layer(
+        {"DB_TYPE": "postgresdb"},
+        encryption_key="k",
+        url_env=build_url_env("http://traefik.local/"),
+    )
+
+    environment = layer["services"]["n8n"]["environment"]
+    assert environment["DB_TYPE"] == "postgresdb"
+    assert environment["N8N_ENCRYPTION_KEY"] == "k"
+    assert environment["N8N_HOST"] == "traefik.local"
+    assert environment["N8N_PROTOCOL"] == "http"
+    assert environment["N8N_PORT"] == "5678"
+    assert environment["WEBHOOK_URL"] == "http://traefik.local/"
+    assert environment["N8N_EDITOR_BASE_URL"] == "http://traefik.local/"
+
+
+def test_build_layer_pebble_checks_still_target_localhost():
+    layer_no_url = build_layer(DB_ENV, encryption_key="k")
+    layer_with_url = build_layer(
+        DB_ENV,
+        encryption_key="k",
+        url_env=build_url_env("http://traefik.local/"),
+    )
+
+    for layer in (layer_no_url, layer_with_url):
+        assert "localhost:5678" in layer["checks"]["live"]["http"]["url"]
+        assert "localhost:5678" in layer["checks"]["ready"]["http"]["url"]
