@@ -83,6 +83,8 @@ parts:
   charm:
     plugin: charm
     source: .
+    charm-binary-python-packages:
+      - bcrypt~=4.2
     override-prime: |
       craftctl default
       chmod +x src/charm.py
