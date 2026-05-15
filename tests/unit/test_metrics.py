@@ -84,6 +84,7 @@ def test_metrics_relation_broken_removes_n8n_metrics(harness):
 def test_scrape_jobs_published_to_relation_data(harness):
     _fully_ready(harness)
     rel_id = harness.add_relation(METRICS_RELATION, PROMETHEUS_APP)
+    harness.add_relation_unit(rel_id, f"{PROMETHEUS_APP}/0")
 
     app_data = harness.get_relation_data(rel_id, APP_NAME)
     assert "scrape_jobs" in app_data
