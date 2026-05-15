@@ -120,6 +120,22 @@ def test_build_layer_with_url_env_merges_into_environment():
     assert environment["N8N_EDITOR_BASE_URL"] == "http://traefik.local/"
 
 
+def test_build_layer_with_metrics_env_sets_n8n_metrics():
+    layer = build_layer(
+        {"DB_TYPE": "postgresdb"},
+        encryption_key="k",
+        metrics_env={"N8N_METRICS": "true"},
+    )
+
+    assert layer["services"]["n8n"]["environment"]["N8N_METRICS"] == "true"
+
+
+def test_build_layer_without_metrics_env_omits_n8n_metrics():
+    layer = build_layer({"DB_TYPE": "postgresdb"}, encryption_key="k")
+
+    assert "N8N_METRICS" not in layer["services"]["n8n"]["environment"]
+
+
 def test_build_layer_pebble_checks_still_target_localhost():
     layer_no_url = build_layer(DB_ENV, encryption_key="k")
     layer_with_url = build_layer(
