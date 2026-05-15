@@ -7,6 +7,7 @@ from ops.model import Relation
 
 PEER_RELATION_NAME = "n8n-peers"
 ENCRYPTION_KEY_SECRET_ID = "encryption-key-secret-id"
+OWNER_BOOTSTRAPPED = "owner-bootstrapped"
 
 
 class CharmState:
@@ -40,3 +41,19 @@ class CharmState:
                 f"Cannot set encryption-key secret id: peer relation {PEER_RELATION_NAME!r} not yet joined"
             )
         rel.data[self._charm.app][ENCRYPTION_KEY_SECRET_ID] = value
+
+    @property
+    def owner_bootstrapped(self) -> bool:
+        rel = self.peer_relation
+        if rel is None:
+            return False
+        return rel.data[self._charm.app].get(OWNER_BOOTSTRAPPED) == "true"
+
+    @owner_bootstrapped.setter
+    def owner_bootstrapped(self, value: bool) -> None:
+        rel = self.peer_relation
+        if rel is None:
+            raise RuntimeError(
+                f"Cannot set owner-bootstrapped flag: peer relation {PEER_RELATION_NAME!r} not yet joined"
+            )
+        rel.data[self._charm.app][OWNER_BOOTSTRAPPED] = "true" if value else ""

@@ -61,11 +61,30 @@ actions:
       Print the current effective N8N_ENCRYPTION_KEY. Store this offsite
       for disaster recovery — losing this key bricks every credential
       stored in n8n's database.
+  create-admin:
+    description: |
+      Create the n8n initial owner. Idempotent: fails if an owner has
+      already been bootstrapped. Must run on the leader.
+    params:
+      email:
+        type: string
+      password:
+        type: string
+        description: |
+          Plaintext password for the new owner. NOTE: appears in
+          `juju show-operation` logs until rotated out of action history.
+      first-name:
+        type: string
+      last-name:
+        type: string
+    required: [email, password, first-name, last-name]
 
 parts:
   charm:
     plugin: charm
     source: .
+    charm-binary-python-packages:
+      - bcrypt~=4.2
     override-prime: |
       craftctl default
       chmod +x src/charm.py
