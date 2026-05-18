@@ -39,6 +39,7 @@ OWNER_PROBE_TIMEOUT_S = 3
 
 STATUS_AWAITING_OWNER = "awaiting admin: run create-admin action or visit /setup"
 STATUS_AWAITING_INGRESS_URL = "awaiting ingress url — webhooks unconfigured"
+STATUS_WAITING_N8N = "waiting for n8n to start"
 ERR_ALREADY_BOOTSTRAPPED = "owner already exists; use n8n UI to manage users"
 ERR_NOT_LEADER = "create-admin must run on the leader unit"
 ERR_PEER_NOT_READY = "peer relation not yet joined; retry"
@@ -58,6 +59,8 @@ class N8nK8sCharm(CharmBase):
         self.framework.observe(self.on.install, self._on_install)
         self.framework.observe(self.on.config_changed, self._on_config_changed)
         self.framework.observe(self.on.n8n_pebble_ready, self._on_pebble_ready)
+        self.framework.observe(self.on.n8n_pebble_check_recovered, self._on_pebble_check_recovered)
+        self.framework.observe(self.on.n8n_pebble_check_failed, self._on_pebble_check_failed)
         self.framework.observe(self.on.update_status, self._on_update_status)
         self.framework.observe(self.on.secret_changed, self._on_secret_changed)
         self.framework.observe(self.on[PEER_RELATION_NAME].relation_created, self._on_peer_created)
@@ -89,6 +92,12 @@ class N8nK8sCharm(CharmBase):
         self._reconcile()
 
     def _on_pebble_ready(self, _event) -> None:
+        self._reconcile()
+
+    def _on_pebble_check_recovered(self, _event) -> None:
+        self._reconcile()
+
+    def _on_pebble_check_failed(self, _event) -> None:
         self._reconcile()
 
     def _on_update_status(self, _event) -> None:
@@ -280,8 +289,20 @@ class N8nK8sCharm(CharmBase):
             if owner_exists is True and state.peer_relation is not None and self.unit.is_leader():
                 state.owner_bootstrapped = True
 
+        if owner_exists is None:
+            self.unit.status = MaintenanceStatus(STATUS_WAITING_N8N)
+            return
+
+        try:
+            ready = container.get_check("ready").status == pebble.CheckStatus.UP
+        except pebble.Error:
+            ready = False
+        if not ready:
+            self.unit.status = MaintenanceStatus(STATUS_WAITING_N8N)
+            return
+
         hints: list[str] = []
-        if owner_exists is False:
+        if not owner_exists:
             hints.append(STATUS_AWAITING_OWNER)
         if not external_host:
             hints.append(STATUS_AWAITING_INGRESS_URL)
