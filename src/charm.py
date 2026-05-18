@@ -13,12 +13,12 @@ import bcrypt
 import ops
 from charms.data_platform_libs.v0.data_interfaces import DatabaseRequires
 from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
+from charms.traefik_k8s.v0.traefik_route import TraefikRouteRequirer
 from ops import main, pebble
 from ops.charm import CharmBase
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
 
 from pebble import build_layer, build_tier1_env, build_url_env
-from relations.ingress import IngressRelation
 from state import PEER_RELATION_NAME, CharmState
 
 logger = logging.getLogger(__name__)
@@ -27,6 +27,7 @@ CONTAINER_NAME = "n8n"
 SERVICE_NAME = "n8n"
 DB_RELATION_NAME = "postgresql"
 METRICS_RELATION_NAME = "metrics-endpoint"
+INGRESS_RELATION_NAME = "traefik-route"
 DATABASE_NAME = "n8n"
 N8N_PORT = 5678
 
@@ -37,6 +38,7 @@ OWNER_PROBE_PATH = "/rest/settings"
 OWNER_PROBE_TIMEOUT_S = 3
 
 STATUS_AWAITING_OWNER = "awaiting admin: run create-admin action or visit /setup"
+STATUS_AWAITING_INGRESS_URL = "awaiting ingress url — webhooks unconfigured"
 ERR_ALREADY_BOOTSTRAPPED = "owner already exists; use n8n UI to manage users"
 ERR_NOT_LEADER = "create-admin must run on the leader unit"
 ERR_PEER_NOT_READY = "peer relation not yet joined; retry"
@@ -65,7 +67,12 @@ class N8nK8sCharm(CharmBase):
         self.framework.observe(self.on[DB_RELATION_NAME].relation_broken, self._on_database_broken)
         self.framework.observe(self.on.get_encryption_key_action, self._on_get_encryption_key_action)
         self.framework.observe(self.on.create_admin_action, self._on_create_admin_action)
-        self._ingress = IngressRelation(self, on_change=self._reconcile)
+        self.framework.observe(self.on[INGRESS_RELATION_NAME].relation_created, self._on_ingress_changed)
+        self.framework.observe(self.on[INGRESS_RELATION_NAME].relation_changed, self._on_ingress_changed)
+        self.framework.observe(self.on[INGRESS_RELATION_NAME].relation_broken, self._on_ingress_changed)
+        ingress_relation = self.model.get_relation(INGRESS_RELATION_NAME)
+        if ingress_relation is not None:
+            self._traefik_route = TraefikRouteRequirer(self, ingress_relation, INGRESS_RELATION_NAME)
         self._metrics = MetricsEndpointProvider(
             self,
             relation_name=METRICS_RELATION_NAME,
@@ -97,6 +104,13 @@ class N8nK8sCharm(CharmBase):
         self._reconcile()
 
     def _on_metrics_changed(self, _event) -> None:
+        self._reconcile()
+
+    def _on_ingress_changed(self, _event) -> None:
+        if not hasattr(self, "_traefik_route"):
+            ingress_relation = self.model.get_relation(INGRESS_RELATION_NAME)
+            if ingress_relation is not None:
+                self._traefik_route = TraefikRouteRequirer(self, ingress_relation, INGRESS_RELATION_NAME)
         self._reconcile()
 
     def _on_database_broken(self, _event) -> None:
@@ -229,14 +243,14 @@ class N8nK8sCharm(CharmBase):
                 self.unit.status = WaitingStatus("waiting for database credentials")
             return
 
-        if not self._ingress.is_related():
+        if self.model.get_relation(INGRESS_RELATION_NAME) is None:
             self.unit.status = BlockedStatus("waiting for ingress relation")
             return
-        url = self._ingress.url
-        if not url:
-            self.unit.status = WaitingStatus("waiting for ingress url")
-            return
-        self._ingress.publish_route()
+        external_host = self._external_host()
+        hostname = external_host or self.app.name
+        scheme = self._scheme() or "http"
+        url = f"{scheme}://{hostname}/"
+        self._publish_traefik_route(hostname)
 
         container = self.unit.get_container(CONTAINER_NAME)
         if not container.can_connect():
@@ -266,7 +280,12 @@ class N8nK8sCharm(CharmBase):
             if owner_exists is True and state.peer_relation is not None and self.unit.is_leader():
                 state.owner_bootstrapped = True
 
-        self.unit.status = ActiveStatus(STATUS_AWAITING_OWNER if owner_exists is False else "")
+        hints: list[str] = []
+        if owner_exists is False:
+            hints.append(STATUS_AWAITING_OWNER)
+        if not external_host:
+            hints.append(STATUS_AWAITING_INGRESS_URL)
+        self.unit.status = ActiveStatus("; ".join(hints))
 
     def _probe_owner_setup(self) -> bool | None:
         """True → owner exists; False → not yet; None → cannot tell."""
@@ -280,6 +299,42 @@ class N8nK8sCharm(CharmBase):
             logger.debug("owner-setup probe inconclusive: %s", exc)
             return None
         return not bool(show_setup)
+
+    def _external_host(self) -> str:
+        return self._traefik_route.external_host if hasattr(self, "_traefik_route") else ""
+
+    def _scheme(self) -> str:
+        return self._traefik_route.scheme if hasattr(self, "_traefik_route") else ""
+
+    def _publish_traefik_route(self, hostname: str) -> None:
+        if not hasattr(self, "_traefik_route") or not self.unit.is_leader() or not self._traefik_route.is_ready():
+            return
+        router_name = f"juju-{self.model.name}-{self.app.name}"
+        service_name = f"{router_name}-service"
+        self._traefik_route.submit_to_traefik(
+            config={
+                "http": {
+                    "routers": {
+                        router_name: {
+                            "entryPoints": ["web"],
+                            "rule": f"Host(`{hostname}`)",
+                            "service": service_name,
+                        },
+                    },
+                    "services": {
+                        service_name: {
+                            "loadBalancer": {
+                                "servers": [
+                                    {
+                                        "url": f"http://{self.app.name}-endpoints.{self.model.name}.svc.cluster.local:{N8N_PORT}"
+                                    }
+                                ],
+                            },
+                        },
+                    },
+                },
+            },
+        )
 
     def _db_env(self) -> dict | None:
         """Return the Postgres env-var dict for n8n, or None if not ready."""
