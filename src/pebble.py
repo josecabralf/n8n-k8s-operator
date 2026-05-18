@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Any
 from urllib.parse import urlparse
 
 from ops.pebble import LayerDict
 
 N8N_URL = "http://localhost:5678"
+
+VALID_LOG_LEVELS = frozenset({"debug", "info", "warn", "error"})
+VALID_SAVE_MODES = frozenset({"all", "none"})
 
 
 def build_url_env(external_url: str) -> dict[str, str]:
@@ -26,10 +30,69 @@ def build_url_env(external_url: str) -> dict[str, str]:
     }
 
 
+def build_tier1_env(
+    config: Mapping[str, Any],
+) -> tuple[dict[str, str] | None, str | None]:
+    """Translate Tier 1 charm configs into n8n env vars.
+
+    Returns (env, None) on success or (None, msg) when a value is invalid;
+    the caller surfaces ``msg`` as a BlockedStatus. This is the single
+    convention for Tier 1 config→env translation (issues #7 and #8 extend
+    the same pattern).
+    """
+    log_level = str(config.get("log-level", "info"))
+    if log_level not in VALID_LOG_LEVELS:
+        return (
+            None,
+            f"invalid log-level '{log_level}'; must be one of: debug, info, warn, error",
+        )
+
+    timezone = str(config.get("timezone", "UTC"))
+    if not timezone:
+        return (None, "timezone must not be empty")
+
+    save_on_error = str(config.get("executions-data-save-on-error", "all"))
+    if save_on_error not in VALID_SAVE_MODES:
+        return (
+            None,
+            f"invalid executions-data-save-on-error '{save_on_error}'; must be 'all' or 'none'",
+        )
+
+    save_on_success = str(config.get("executions-data-save-on-success", "all"))
+    if save_on_success not in VALID_SAVE_MODES:
+        return (
+            None,
+            f"invalid executions-data-save-on-success '{save_on_success}'; must be 'all' or 'none'",
+        )
+
+    max_age = int(config.get("executions-data-max-age-hours", 336))
+    if max_age < 0:
+        return (None, "executions-data-max-age-hours must be >= 0")
+
+    prune = bool(config.get("executions-data-prune", False))
+    save_on_progress = bool(config.get("executions-data-save-on-progress", False))
+    disable_user_reg = bool(config.get("disable-user-registration", False))
+
+    env = {
+        "N8N_LOG_LEVEL": log_level,
+        "GENERIC_TIMEZONE": timezone,
+        "TZ": timezone,
+        "EXECUTIONS_DATA_PRUNE": "true" if prune else "false",
+        "EXECUTIONS_DATA_MAX_AGE": str(max_age),
+        "EXECUTIONS_DATA_SAVE_ON_ERROR": save_on_error,
+        "EXECUTIONS_DATA_SAVE_ON_SUCCESS": save_on_success,
+        "EXECUTIONS_DATA_SAVE_ON_PROGRESS": "true" if save_on_progress else "false",
+        "N8N_USER_MANAGEMENT_DISABLED": "true" if disable_user_reg else "false",
+    }
+    return (env, None)
+
+
 def build_layer(
     db_env: Mapping[str, str],
     encryption_key: str = "",
     url_env: Mapping[str, str] | None = None,
+    tier1_env: Mapping[str, str] | None = None,
+    metrics_env: Mapping[str, str] | None = None,
     binary_data_mode: str | None = None,
 ) -> LayerDict:
     """Return a Pebble layer dict that runs n8n with the given DB env vars.
@@ -46,9 +109,16 @@ def build_layer(
             layer entirely; this default exists only to keep the
             signature backwards-compatible for callers that have not
             yet been updated.
-        url_env: Optional mapping of n8n URL-related env vars (typically
-            produced by :func:`build_url_env`) merged into the service
-            environment. When ``None`` no URL vars are emitted.
+        url_env: Optional mapping of ingress-derived env vars
+            (``N8N_HOST``, ``N8N_PROTOCOL``, ``N8N_PORT``,
+            ``WEBHOOK_URL``, ``N8N_EDITOR_BASE_URL``).
+        tier1_env: Optional mapping of Tier 1 n8n env vars derived from
+            charm config (logging, timezone, executions retention,
+            user-management toggle).
+        metrics_env: Optional mapping of metrics env vars, typically
+            ``{"N8N_METRICS": "true"}`` when the ``metrics-endpoint``
+            relation is present. Omit to leave n8n metrics disabled
+            (n8n default — ``/metrics`` returns 404).
         binary_data_mode: If set, written as
             ``N8N_DEFAULT_BINARY_DATA_MODE``. Use ``"filesystem"`` when
             the binary-data storage is attached, ``"s3"`` when the s3
@@ -60,8 +130,12 @@ def build_layer(
         check on /healthz and a ready HTTP check on /healthz/readiness.
     """
     environment: dict[str, str] = dict(db_env)
+    if tier1_env:
+        environment.update(tier1_env)
     if url_env:
         environment.update(url_env)
+    if metrics_env:
+        environment.update(metrics_env)
     if encryption_key:
         environment["N8N_ENCRYPTION_KEY"] = encryption_key
     if binary_data_mode:
