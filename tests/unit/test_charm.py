@@ -7,7 +7,11 @@ from ops.model import ActiveStatus, BlockedStatus, WaitingStatus
 from ops.pebble import CheckStatus
 from ops.testing import ActionFailed, Harness
 
-from charm import N8nK8sCharm
+from charm import (
+    ERR_ALREADY_BOOTSTRAPPED,
+    STATUS_AWAITING_OWNER,
+    N8nK8sCharm,
+)
 from state import ENCRYPTION_KEY_SECRET_ID, OWNER_BOOTSTRAPPED, PEER_RELATION_NAME
 
 DB_RELATION = "postgresql"
@@ -379,9 +383,55 @@ def test_create_admin_action_fails_when_container_not_connectable():
         harness.cleanup()
 
 
-def test_status_blocks_when_db_ready_but_no_admin(harness):
+def test_status_active_with_hint_when_no_admin(harness, monkeypatch):
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: False)
     _fully_ready(harness)
-    assert harness.charm.unit.status == BlockedStatus("no admin user; run create-admin action")
+    assert harness.charm.unit.status == ActiveStatus(STATUS_AWAITING_OWNER)
+
+
+def test_status_active_when_probe_finds_manual_admin(harness, monkeypatch):
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: True)
+    _fully_ready(harness)
+    assert harness.charm.unit.status == ActiveStatus()
+    rel = harness.charm.model.get_relation(PEER_RELATION_NAME)
+    assert rel.data[harness.charm.app][OWNER_BOOTSTRAPPED] == "true"
+
+
+def test_status_active_with_no_hint_when_probe_inconclusive(harness, monkeypatch):
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: None)
+    _fully_ready(harness)
+    assert harness.charm.unit.status == ActiveStatus()
+
+
+def test_create_admin_action_fails_when_probe_finds_admin(harness, monkeypatch):
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: True)
+    _fully_ready(harness)
+    with pytest.raises(ActionFailed) as exc_info:
+        harness.run_action(
+            "create-admin",
+            params={
+                "email": "ops@example.com",
+                "password": "hunter2",
+                "first-name": "Ops",
+                "last-name": "Admin",
+            },
+        )
+    assert exc_info.value.message == ERR_ALREADY_BOOTSTRAPPED
+
+
+def test_create_admin_action_runs_when_probe_inconclusive_and_no_cache(harness, monkeypatch):
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: None)
+    _fully_ready(harness)
+    output = harness.run_action(
+        "create-admin",
+        params={
+            "email": "ops@example.com",
+            "password": "hunter2",
+            "first-name": "Ops",
+            "last-name": "Admin",
+        },
+    )
+    assert output.results == {"created": True, "email": "ops@example.com"}
 
 
 def test_status_active_after_action(harness, monkeypatch):
