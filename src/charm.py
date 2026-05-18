@@ -37,8 +37,6 @@ ENCRYPTION_KEY_CONFIG = "encryption-key"
 OWNER_PROBE_PATH = "/rest/settings"
 OWNER_PROBE_TIMEOUT_S = 3
 
-STATUS_AWAITING_OWNER = "awaiting admin: run create-admin action or visit /setup"
-STATUS_AWAITING_INGRESS_URL = "awaiting ingress url — webhooks unconfigured"
 STATUS_WAITING_N8N = "waiting for n8n to start"
 ERR_ALREADY_BOOTSTRAPPED = "owner already exists; use n8n UI to manage users"
 ERR_NOT_LEADER = "create-admin must run on the leader unit"
@@ -152,8 +150,7 @@ class N8nK8sCharm(CharmBase):
             event.fail(ERR_CONTAINER_NOT_READY)
             return
 
-        probed = self._probe_owner_setup()
-        if probed is True or (probed is None and state.owner_bootstrapped):
+        if self._probe_owner_setup() is not False:
             event.fail(ERR_ALREADY_BOOTSTRAPPED)
             return
 
@@ -183,7 +180,6 @@ class N8nK8sCharm(CharmBase):
         )
         container.replan()
 
-        state.owner_bootstrapped = True
         event.set_results({"created": True, "email": email})
 
     def _effective_encryption_key(self) -> tuple[str | None, str | None]:
@@ -281,18 +277,6 @@ class N8nK8sCharm(CharmBase):
         )
         container.replan()
 
-        state = CharmState(self)
-        if state.owner_bootstrapped:
-            owner_exists: bool | None = True
-        else:
-            owner_exists = self._probe_owner_setup()
-            if owner_exists is True and state.peer_relation is not None and self.unit.is_leader():
-                state.owner_bootstrapped = True
-
-        if owner_exists is None:
-            self.unit.status = MaintenanceStatus(STATUS_WAITING_N8N)
-            return
-
         try:
             ready = container.get_check("ready").status == pebble.CheckStatus.UP
         except pebble.Error:
@@ -301,12 +285,7 @@ class N8nK8sCharm(CharmBase):
             self.unit.status = MaintenanceStatus(STATUS_WAITING_N8N)
             return
 
-        hints: list[str] = []
-        if not owner_exists:
-            hints.append(STATUS_AWAITING_OWNER)
-        if not external_host:
-            hints.append(STATUS_AWAITING_INGRESS_URL)
-        self.unit.status = ActiveStatus("; ".join(hints))
+        self.unit.status = ActiveStatus()
 
     def _probe_owner_setup(self) -> bool | None:
         """True → owner exists; False → not yet; None → cannot tell."""

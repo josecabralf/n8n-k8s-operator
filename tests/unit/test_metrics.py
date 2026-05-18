@@ -6,8 +6,6 @@ import json
 
 from ops.testing import Harness
 
-from state import OWNER_BOOTSTRAPPED, PEER_RELATION_NAME
-
 DB_RELATION = "postgresql"
 PEER_RELATION = "n8n-peers"
 INGRESS_RELATION = "traefik-route"
@@ -31,12 +29,6 @@ def _begin(harness: Harness) -> None:
     harness.begin_with_initial_hooks()
 
 
-def _set_owner_bootstrapped(harness: Harness) -> None:
-    rel = harness.charm.model.get_relation(PEER_RELATION_NAME)
-    assert rel is not None
-    rel.data[harness.charm.app][OWNER_BOOTSTRAPPED] = "true"
-
-
 def _add_postgres(harness: Harness) -> int:
     rel_id = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(rel_id, "postgresql-k8s", DB_DATA)
@@ -53,7 +45,6 @@ def _fully_ready(harness: Harness) -> None:
     _begin(harness)
     harness.container_pebble_ready(CONTAINER)
     _add_ingress(harness)
-    _set_owner_bootstrapped(harness)
     _add_postgres(harness)
 
 

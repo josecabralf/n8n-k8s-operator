@@ -6,11 +6,7 @@ import yaml
 from ops.model import ActiveStatus, BlockedStatus
 from ops.testing import Harness
 
-from charm import (
-    STATUS_AWAITING_INGRESS_URL,
-    STATUS_AWAITING_OWNER,
-    N8nK8sCharm,
-)
+from charm import N8nK8sCharm
 
 DB_RELATION = "postgresql"
 PEER_RELATION = "n8n-peers"
@@ -45,14 +41,14 @@ def test_blocked_without_ingress_even_with_postgres(harness):
     assert harness.charm.unit.status == BlockedStatus("waiting for ingress relation")
 
 
-def test_active_with_hint_when_ingress_joined_without_host_yet(harness, monkeypatch):
+def test_publishes_route_with_app_name_fallback_when_host_not_yet_set(harness, monkeypatch):
     monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: True)
     _begin(harness)
     harness.container_pebble_ready(CONTAINER)
     _add_postgres(harness)
     rel_id = harness.add_relation(INGRESS_RELATION, TRAEFIK_APP)
 
-    assert harness.charm.unit.status == ActiveStatus(STATUS_AWAITING_INGRESS_URL)
+    assert harness.charm.unit.status == ActiveStatus()
 
     # With no external_host published yet, the route is still submitted using
     # app.name as a fallback host so the workload starts immediately.
@@ -68,23 +64,13 @@ def test_active_with_hint_when_ingress_joined_without_host_yet(harness, monkeypa
     assert env["N8N_EDITOR_BASE_URL"] == f"http://{APP_NAME}/"
 
 
-def test_active_with_composed_hint_no_admin_and_no_url(harness, monkeypatch):
-    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: False)
-    _begin(harness)
-    harness.container_pebble_ready(CONTAINER)
-    _add_postgres(harness)
-    harness.add_relation(INGRESS_RELATION, TRAEFIK_APP)
-
-    assert harness.charm.unit.status == ActiveStatus(f"{STATUS_AWAITING_OWNER}; {STATUS_AWAITING_INGRESS_URL}")
-
-
-def test_url_arrives_later_clears_hint_and_populates_env(harness, monkeypatch):
+def test_url_arrives_later_replans_with_real_host(harness, monkeypatch):
     monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: True)
     _begin(harness)
     harness.container_pebble_ready(CONTAINER)
     _add_postgres(harness)
     rel_id = harness.add_relation(INGRESS_RELATION, TRAEFIK_APP)
-    assert harness.charm.unit.status == ActiveStatus(STATUS_AWAITING_INGRESS_URL)
+    assert harness.charm.unit.status == ActiveStatus()
 
     env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
     assert env["N8N_HOST"] == APP_NAME
