@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import pytest
-from ops.model import ActiveStatus, BlockedStatus, WaitingStatus
+from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
 from ops.pebble import CheckStatus
 from ops.testing import ActionFailed, Harness
 
-from charm import N8nK8sCharm
-from state import ENCRYPTION_KEY_SECRET_ID, OWNER_BOOTSTRAPPED, PEER_RELATION_NAME
+from charm import (
+    ERR_ALREADY_BOOTSTRAPPED,
+    STATUS_WAITING_N8N,
+    N8nK8sCharm,
+)
+from state import ENCRYPTION_KEY_SECRET_ID, PEER_RELATION_NAME
 
 DB_RELATION = "postgresql"
 PEER_RELATION = "n8n-peers"
@@ -53,12 +57,6 @@ def _stored_secret_id(harness: Harness) -> str | None:
     return rel.data[harness.charm.app].get(ENCRYPTION_KEY_SECRET_ID)
 
 
-def _set_owner_bootstrapped(harness: Harness, value: bool = True) -> None:
-    rel = harness.charm.model.get_relation(PEER_RELATION_NAME)
-    assert rel is not None
-    rel.data[harness.charm.app][OWNER_BOOTSTRAPPED] = "true" if value else ""
-
-
 def _fully_ready(harness: Harness) -> None:
     _begin(harness)
     harness.container_pebble_ready(CONTAINER)
@@ -88,7 +86,6 @@ def test_database_created_writes_pebble_layer_with_db_env_and_encryption_key(har
     _begin(harness)
     harness.container_pebble_ready(CONTAINER)
     _add_ingress(harness)
-    _set_owner_bootstrapped(harness)
     rel_id = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(rel_id, "postgresql-k8s", DB_DATA)
 
@@ -105,7 +102,6 @@ def test_active_status_once_ready_check_is_up(harness, monkeypatch):
     _begin(harness)
     harness.container_pebble_ready(CONTAINER)
     _add_ingress(harness)
-    _set_owner_bootstrapped(harness)
     rel_id = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(rel_id, "postgresql-k8s", DB_DATA)
 
@@ -123,7 +119,6 @@ def test_endpoints_changed_updates_env(harness):
     _begin(harness)
     harness.container_pebble_ready(CONTAINER)
     _add_ingress(harness)
-    _set_owner_bootstrapped(harness)
     rel_id = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(rel_id, "postgresql-k8s", DB_DATA)
     harness.update_relation_data(rel_id, "postgresql-k8s", {"endpoints": "10.9.9.9:5433"})
@@ -167,7 +162,6 @@ def test_pebble_env_contains_encryption_key(harness):
     _begin(harness)
     harness.container_pebble_ready(CONTAINER)
     _add_ingress(harness)
-    _set_owner_bootstrapped(harness)
     rel_id = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(rel_id, "postgresql-k8s", DB_DATA)
 
@@ -183,7 +177,6 @@ def test_config_override_with_granted_secret(harness):
     _begin(harness)
     harness.container_pebble_ready(CONTAINER)
     _add_ingress(harness)
-    _set_owner_bootstrapped(harness)
     rel_id = harness.add_relation(DB_RELATION, "postgresql-k8s")
     harness.update_relation_data(rel_id, "postgresql-k8s", DB_DATA)
 
@@ -254,7 +247,6 @@ def test_action_fails_when_override_secret_not_granted(harness):
 
 def test_config_change_log_level_propagates_to_env(harness):
     _fully_ready(harness)
-    _set_owner_bootstrapped(harness)
     harness.update_config({"log-level": "debug"})
 
     env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
@@ -263,7 +255,6 @@ def test_config_change_log_level_propagates_to_env(harness):
 
 def test_config_invalid_log_level_blocks(harness):
     _fully_ready(harness)
-    _set_owner_bootstrapped(harness)
     harness.update_config({"log-level": "garbage"})
 
     assert harness.charm.unit.status == BlockedStatus(
@@ -273,7 +264,6 @@ def test_config_invalid_log_level_blocks(harness):
 
 def test_config_timezone_sets_both_env_vars(harness):
     _fully_ready(harness)
-    _set_owner_bootstrapped(harness)
     harness.update_config({"timezone": "Europe/Madrid"})
 
     env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
@@ -284,7 +274,8 @@ def test_config_timezone_sets_both_env_vars(harness):
 # --- Owner bootstrap (issue #5) ---
 
 
-def test_create_admin_action_writes_owner_env_to_pebble_layer(harness):
+def test_create_admin_action_writes_owner_env_to_pebble_layer(harness, monkeypatch):
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: False)
     _fully_ready(harness)
     output = harness.run_action(
         "create-admin",
@@ -302,37 +293,6 @@ def test_create_admin_action_writes_owner_env_to_pebble_layer(harness):
     assert env["N8N_INSTANCE_OWNER_FIRST_NAME"] == "Ops"
     assert env["N8N_INSTANCE_OWNER_LAST_NAME"] == "Admin"
     assert env["N8N_INSTANCE_OWNER_PASSWORD_HASH"].startswith("$2b$")
-
-
-def test_create_admin_action_sets_bootstrapped_flag(harness):
-    _fully_ready(harness)
-    harness.run_action(
-        "create-admin",
-        params={
-            "email": "ops@example.com",
-            "password": "hunter2",
-            "first-name": "Ops",
-            "last-name": "Admin",
-        },
-    )
-    rel = harness.charm.model.get_relation(PEER_RELATION_NAME)
-    assert rel.data[harness.charm.app][OWNER_BOOTSTRAPPED] == "true"
-
-
-def test_create_admin_action_fails_when_already_bootstrapped(harness):
-    _fully_ready(harness)
-    _set_owner_bootstrapped(harness, True)
-    with pytest.raises(ActionFailed) as exc_info:
-        harness.run_action(
-            "create-admin",
-            params={
-                "email": "ops@example.com",
-                "password": "hunter2",
-                "first-name": "Ops",
-                "last-name": "Admin",
-            },
-        )
-    assert "already exists" in exc_info.value.message
 
 
 def test_create_admin_action_fails_on_follower():
@@ -379,12 +339,111 @@ def test_create_admin_action_fails_when_container_not_connectable():
         harness.cleanup()
 
 
-def test_status_blocks_when_db_ready_but_no_admin(harness):
+def test_status_active_when_no_admin(harness, monkeypatch):
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: False)
     _fully_ready(harness)
-    assert harness.charm.unit.status == BlockedStatus("no admin user; run create-admin action")
+    container = harness.charm.unit.get_container(CONTAINER)
+
+    class _Check:
+        status = CheckStatus.UP
+
+    monkeypatch.setattr(container, "get_check", lambda _name: _Check())
+    harness.charm.on.update_status.emit()
+    assert harness.charm.unit.status == ActiveStatus()
+
+
+def test_status_active_when_probe_inconclusive(harness, monkeypatch):
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: None)
+    _fully_ready(harness)
+    container = harness.charm.unit.get_container(CONTAINER)
+
+    class _Check:
+        status = CheckStatus.UP
+
+    monkeypatch.setattr(container, "get_check", lambda _name: _Check())
+    harness.charm.on.update_status.emit()
+    assert harness.charm.unit.status == ActiveStatus()
+
+
+def test_create_admin_action_fails_when_probe_finds_admin(harness, monkeypatch):
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: True)
+    _fully_ready(harness)
+    with pytest.raises(ActionFailed) as exc_info:
+        harness.run_action(
+            "create-admin",
+            params={
+                "email": "ops@example.com",
+                "password": "hunter2",
+                "first-name": "Ops",
+                "last-name": "Admin",
+            },
+        )
+    assert exc_info.value.message == ERR_ALREADY_BOOTSTRAPPED
+
+
+def test_create_admin_action_fails_when_probe_inconclusive(harness, monkeypatch):
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: None)
+    _fully_ready(harness)
+    with pytest.raises(ActionFailed) as exc_info:
+        harness.run_action(
+            "create-admin",
+            params={
+                "email": "ops@example.com",
+                "password": "hunter2",
+                "first-name": "Ops",
+                "last-name": "Admin",
+            },
+        )
+    assert exc_info.value.message == ERR_ALREADY_BOOTSTRAPPED
+
+
+class _MutableCheck:
+    """Helper: a Check stand-in whose status flips via the shared dict."""
+
+    def __init__(self, state: dict) -> None:
+        self._state = state
+
+    @property
+    def status(self) -> CheckStatus:
+        return CheckStatus.UP if self._state["up"] else CheckStatus.DOWN
+
+
+def test_pebble_check_recovered_flips_to_active(harness, monkeypatch):
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: True)
+    state = {"up": False}
+    from ops.model import Container
+
+    monkeypatch.setattr(Container, "get_check", lambda self, _name: _MutableCheck(state))
+
+    _fully_ready(harness)
+    assert harness.charm.unit.status == MaintenanceStatus(STATUS_WAITING_N8N)
+
+    state["up"] = True
+    container = harness.charm.unit.get_container(CONTAINER)
+    harness.charm.on.n8n_pebble_check_recovered.emit(workload=container, check_name="ready")
+
+    assert harness.charm.unit.status == ActiveStatus()
+
+
+def test_pebble_check_failed_re_evaluates(harness, monkeypatch):
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: True)
+    state = {"up": True}
+    from ops.model import Container
+
+    monkeypatch.setattr(Container, "get_check", lambda self, _name: _MutableCheck(state))
+
+    _fully_ready(harness)
+    assert harness.charm.unit.status == ActiveStatus()
+
+    state["up"] = False
+    container = harness.charm.unit.get_container(CONTAINER)
+    harness.charm.on.n8n_pebble_check_failed.emit(workload=container, check_name="ready")
+
+    assert harness.charm.unit.status == MaintenanceStatus(STATUS_WAITING_N8N)
 
 
 def test_status_active_after_action(harness, monkeypatch):
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: False)
     _fully_ready(harness)
     container = harness.charm.unit.get_container(CONTAINER)
 
