@@ -53,6 +53,9 @@ requires:
   traefik-route:
     interface: traefik_route
     limit: 1
+  s3:
+    interface: s3
+    limit: 1
 
 provides:
   metrics-endpoint:
