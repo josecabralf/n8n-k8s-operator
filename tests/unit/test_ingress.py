@@ -6,7 +6,7 @@ import yaml
 from ops.model import ActiveStatus, BlockedStatus
 from ops.testing import Harness
 
-from charm import N8nK8sCharm
+from charm import STATUS_BINARY_DATA_FALLBACK, N8nK8sCharm
 
 DB_RELATION = "postgresql"
 PEER_RELATION = "n8n-peers"
@@ -48,7 +48,7 @@ def test_publishes_route_with_app_name_fallback_when_host_not_yet_set(harness, m
     _add_postgres(harness)
     rel_id = harness.add_relation(INGRESS_RELATION, TRAEFIK_APP)
 
-    assert harness.charm.unit.status == ActiveStatus()
+    assert harness.charm.unit.status == ActiveStatus(STATUS_BINARY_DATA_FALLBACK)
 
     # With no external_host published yet, the route is still submitted using
     # app.name as a fallback host so the workload starts immediately.
@@ -70,14 +70,14 @@ def test_url_arrives_later_replans_with_real_host(harness, monkeypatch):
     harness.container_pebble_ready(CONTAINER)
     _add_postgres(harness)
     rel_id = harness.add_relation(INGRESS_RELATION, TRAEFIK_APP)
-    assert harness.charm.unit.status == ActiveStatus()
+    assert harness.charm.unit.status == ActiveStatus(STATUS_BINARY_DATA_FALLBACK)
 
     env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
     assert env["N8N_HOST"] == APP_NAME
 
     harness.update_relation_data(rel_id, TRAEFIK_APP, {"external_host": "traefik.local", "scheme": "http"})
 
-    assert harness.charm.unit.status == ActiveStatus()
+    assert harness.charm.unit.status == ActiveStatus(STATUS_BINARY_DATA_FALLBACK)
     env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
     assert env["N8N_HOST"] == "traefik.local"
     assert env["WEBHOOK_URL"] == "http://traefik.local/"

@@ -93,6 +93,7 @@ def build_layer(
     url_env: Mapping[str, str] | None = None,
     tier1_env: Mapping[str, str] | None = None,
     metrics_env: Mapping[str, str] | None = None,
+    binary_data_mode: str | None = None,
 ) -> LayerDict:
     """Return a Pebble layer dict that runs n8n with the given DB env vars.
 
@@ -118,6 +119,11 @@ def build_layer(
             ``{"N8N_METRICS": "true"}`` when the ``metrics-endpoint``
             relation is present. Omit to leave n8n metrics disabled
             (n8n default — ``/metrics`` returns 404).
+        binary_data_mode: If set, written as
+            ``N8N_DEFAULT_BINARY_DATA_MODE``. Use ``"filesystem"`` when
+            the binary-data storage is attached, ``"s3"`` when the s3
+            relation is wired up. When ``None``, the variable is omitted
+            and n8n falls back to in-DB storage.
 
     Returns:
         A Pebble LayerDict with one service (``n8n``) plus an alive HTTP
@@ -132,6 +138,8 @@ def build_layer(
         environment.update(metrics_env)
     if encryption_key:
         environment["N8N_ENCRYPTION_KEY"] = encryption_key
+    if binary_data_mode:
+        environment["N8N_DEFAULT_BINARY_DATA_MODE"] = binary_data_mode
 
     return {
         "summary": "n8n workload layer",

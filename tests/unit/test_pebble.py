@@ -136,6 +136,20 @@ def test_build_layer_without_metrics_env_omits_n8n_metrics():
     assert "N8N_METRICS" not in layer["services"]["n8n"]["environment"]
 
 
+def test_build_layer_includes_binary_data_mode_when_set():
+    layer = build_layer(DB_ENV, binary_data_mode="filesystem")
+
+    env = layer["services"]["n8n"]["environment"]
+    assert env["N8N_DEFAULT_BINARY_DATA_MODE"] == "filesystem"
+
+
+def test_build_layer_omits_binary_data_mode_by_default():
+    layer = build_layer(DB_ENV)
+
+    env = layer["services"]["n8n"]["environment"]
+    assert "N8N_DEFAULT_BINARY_DATA_MODE" not in env
+
+
 def test_build_layer_pebble_checks_still_target_localhost():
     layer_no_url = build_layer(DB_ENV, encryption_key="k")
     layer_with_url = build_layer(

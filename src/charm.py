@@ -34,10 +34,16 @@ N8N_PORT = 5678
 ENCRYPTION_KEY_SECRET_LABEL = "n8n-encryption-key"
 ENCRYPTION_KEY_CONFIG = "encryption-key"
 
+BINARY_DATA_STORAGE_NAME = "binary-data"
+BINARY_DATA_MOUNT_PATH = "/home/node/.n8n/binaryData"
+
 OWNER_PROBE_PATH = "/rest/settings"
 OWNER_PROBE_TIMEOUT_S = 3
 
 STATUS_WAITING_N8N = "waiting for n8n to start"
+STATUS_BINARY_DATA_FALLBACK = (
+    "binary data in DB; attach 'binary-data' storage or " "relate s3-integrator for production use"
+)
 ERR_ALREADY_BOOTSTRAPPED = "owner already exists; use n8n UI to manage users"
 ERR_NOT_LEADER = "create-admin must run on the leader unit"
 ERR_PEER_NOT_READY = "peer relation not yet joined; retry"
@@ -71,6 +77,8 @@ class N8nK8sCharm(CharmBase):
         self.framework.observe(self.on[INGRESS_RELATION_NAME].relation_created, self._on_ingress_changed)
         self.framework.observe(self.on[INGRESS_RELATION_NAME].relation_changed, self._on_ingress_changed)
         self.framework.observe(self.on[INGRESS_RELATION_NAME].relation_broken, self._on_ingress_changed)
+        self.framework.observe(self.on[BINARY_DATA_STORAGE_NAME].storage_attached, self._on_storage_attached)
+        self.framework.observe(self.on[BINARY_DATA_STORAGE_NAME].storage_detaching, self._on_storage_detaching)
         ingress_relation = self.model.get_relation(INGRESS_RELATION_NAME)
         if ingress_relation is not None:
             self._traefik_route = TraefikRouteRequirer(self, ingress_relation, INGRESS_RELATION_NAME)
@@ -119,6 +127,14 @@ class N8nK8sCharm(CharmBase):
             if ingress_relation is not None:
                 self._traefik_route = TraefikRouteRequirer(self, ingress_relation, INGRESS_RELATION_NAME)
         self._reconcile()
+
+    def _on_storage_attached(self, _event) -> None:
+        self._reconcile()
+
+    def _on_storage_detaching(self, _event) -> None:
+        # During storage-detaching the storage may still appear in
+        # self.model.storages, so force the reconcile to treat it as gone.
+        self._reconcile(binary_data_detaching=True)
 
     def _on_database_broken(self, _event) -> None:
         container = self.unit.get_container(CONTAINER_NAME)
@@ -226,7 +242,7 @@ class N8nK8sCharm(CharmBase):
             return (None, "stored encryption-key secret missing 'value' field")
         return (value, None)
 
-    def _reconcile(self) -> None:
+    def _reconcile(self, *, binary_data_detaching: bool = False) -> None:
         key, blocked_msg = self._effective_encryption_key()
         if blocked_msg is not None:
             self.unit.status = BlockedStatus(blocked_msg)
@@ -263,6 +279,10 @@ class N8nK8sCharm(CharmBase):
             return
 
         self.unit.status = MaintenanceStatus("starting n8n")
+        binary_data_attached = not binary_data_detaching and self._binary_data_attached()
+        binary_data_mode = "filesystem" if binary_data_attached else None
+        if binary_data_attached:
+            self._chown_binary_data_mount(container)
         metrics_env = {"N8N_METRICS": "true"} if self.model.get_relation(METRICS_RELATION_NAME) is not None else None
         container.add_layer(
             CONTAINER_NAME,
@@ -272,6 +292,7 @@ class N8nK8sCharm(CharmBase):
                 url_env=build_url_env(url),
                 tier1_env=tier1_env,
                 metrics_env=metrics_env,
+                binary_data_mode=binary_data_mode,
             ),
             combine=True,
         )
@@ -285,7 +306,10 @@ class N8nK8sCharm(CharmBase):
             self.unit.status = MaintenanceStatus(STATUS_WAITING_N8N)
             return
 
-        self.unit.status = ActiveStatus()
+        if binary_data_attached:
+            self.unit.status = ActiveStatus()
+        else:
+            self.unit.status = ActiveStatus(STATUS_BINARY_DATA_FALLBACK)
 
     def _probe_owner_setup(self) -> bool | None:
         """True → owner exists; False → not yet; None → cannot tell."""
@@ -335,6 +359,29 @@ class N8nK8sCharm(CharmBase):
                 },
             },
         )
+
+    def _binary_data_attached(self) -> bool:
+        """True iff the binary-data filesystem storage is attached to this unit."""
+        storages = self.model.storages.get(BINARY_DATA_STORAGE_NAME, [])
+        return any(getattr(s, "location", None) for s in storages)
+
+    def _chown_binary_data_mount(self, container: ops.Container) -> None:
+        """Ensure the n8n `node` user owns the mounted binary-data dir.
+
+        Idempotent and best-effort: logs a warning if the chown fails so
+        we don't stall reconcile on workload images that don't ship
+        chown, or storage classes that already mount with the right uid.
+        """
+        try:
+            container.exec(
+                ["chown", "-R", "node:node", BINARY_DATA_MOUNT_PATH],
+                timeout=10,
+            ).wait()
+        except (pebble.Error, ops.pebble.ExecError):
+            logger.warning(
+                "chown of %s failed; n8n may be unable to write attachments",
+                BINARY_DATA_MOUNT_PATH,
+            )
 
     def _db_env(self) -> dict | None:
         """Return the Postgres env-var dict for n8n, or None if not ready."""

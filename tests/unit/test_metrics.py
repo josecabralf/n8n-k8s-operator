@@ -88,6 +88,8 @@ def test_reaches_active_without_metrics_relation(harness, monkeypatch):
     from ops.model import ActiveStatus
     from ops.pebble import CheckStatus
 
+    from charm import STATUS_BINARY_DATA_FALLBACK
+
     _fully_ready(harness)
     container = harness.charm.unit.get_container(CONTAINER)
 
@@ -96,4 +98,4 @@ def test_reaches_active_without_metrics_relation(harness, monkeypatch):
 
     monkeypatch.setattr(container, "get_check", lambda _name: _Check())
     harness.charm.on.update_status.emit()
-    assert harness.charm.unit.status == ActiveStatus()
+    assert harness.charm.unit.status == ActiveStatus(STATUS_BINARY_DATA_FALLBACK)

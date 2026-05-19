@@ -112,7 +112,10 @@ def test_active_status_once_ready_check_is_up(harness, monkeypatch):
 
     monkeypatch.setattr(container, "get_check", lambda _name: _Check())
     harness.charm.on.update_status.emit()
-    assert harness.charm.unit.status == ActiveStatus()
+    # No binary-data storage attached → Active carries the fallback warning.
+    assert harness.charm.unit.status == ActiveStatus(
+        "binary data in DB; attach 'binary-data' storage or " "relate s3-integrator for production use"
+    )
 
 
 def test_endpoints_changed_updates_env(harness):
@@ -349,7 +352,7 @@ def test_status_active_when_no_admin(harness, monkeypatch):
 
     monkeypatch.setattr(container, "get_check", lambda _name: _Check())
     harness.charm.on.update_status.emit()
-    assert harness.charm.unit.status == ActiveStatus()
+    assert harness.charm.unit.status == ActiveStatus(STATUS_BINARY_DATA_FALLBACK)
 
 
 def test_status_active_when_probe_inconclusive(harness, monkeypatch):
@@ -362,7 +365,7 @@ def test_status_active_when_probe_inconclusive(harness, monkeypatch):
 
     monkeypatch.setattr(container, "get_check", lambda _name: _Check())
     harness.charm.on.update_status.emit()
-    assert harness.charm.unit.status == ActiveStatus()
+    assert harness.charm.unit.status == ActiveStatus(STATUS_BINARY_DATA_FALLBACK)
 
 
 def test_create_admin_action_fails_when_probe_finds_admin(harness, monkeypatch):
@@ -422,7 +425,7 @@ def test_pebble_check_recovered_flips_to_active(harness, monkeypatch):
     container = harness.charm.unit.get_container(CONTAINER)
     harness.charm.on.n8n_pebble_check_recovered.emit(workload=container, check_name="ready")
 
-    assert harness.charm.unit.status == ActiveStatus()
+    assert harness.charm.unit.status == ActiveStatus(STATUS_BINARY_DATA_FALLBACK)
 
 
 def test_pebble_check_failed_re_evaluates(harness, monkeypatch):
@@ -433,7 +436,7 @@ def test_pebble_check_failed_re_evaluates(harness, monkeypatch):
     monkeypatch.setattr(Container, "get_check", lambda self, _name: _MutableCheck(state))
 
     _fully_ready(harness)
-    assert harness.charm.unit.status == ActiveStatus()
+    assert harness.charm.unit.status == ActiveStatus(STATUS_BINARY_DATA_FALLBACK)
 
     state["up"] = False
     container = harness.charm.unit.get_container(CONTAINER)
@@ -461,4 +464,99 @@ def test_status_active_after_action(harness, monkeypatch):
         },
     )
     harness.charm.on.update_status.emit()
+    # No binary-data storage attached in this test → warning message on Active.
+    assert harness.charm.unit.status == ActiveStatus(
+        "binary data in DB; attach 'binary-data' storage or " "relate s3-integrator for production use"
+    )
+
+
+# --- Binary data storage (issue #9) ---
+
+
+BINARY_DATA_STORAGE = "binary-data"
+STATUS_BINARY_DATA_FALLBACK = (
+    "binary data in DB; attach 'binary-data' storage or " "relate s3-integrator for production use"
+)
+
+
+def _mute_chown(harness: Harness, monkeypatch) -> None:
+    """Skip the chown exec in unit tests — Harness exec doesn't run chown."""
+    # Patch the bound method so reconcile doesn't blow up.
+    monkeypatch.setattr(
+        harness.charm,
+        "_chown_binary_data_mount",
+        lambda _container: None,
+    )
+
+
+def test_binary_data_attached_sets_filesystem_mode(harness, monkeypatch):
+    storage_id = harness.add_storage(BINARY_DATA_STORAGE, attach=True)[0]
+    _fully_ready(harness)
+    _mute_chown(harness, monkeypatch)
+    harness.charm.on.update_status.emit()
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert env["N8N_DEFAULT_BINARY_DATA_MODE"] == "filesystem"
+    assert storage_id is not None
+
+
+def test_binary_data_unattached_omits_mode_and_warns_via_active_message(harness, monkeypatch):
+    _fully_ready(harness)
+    _mute_chown(harness, monkeypatch)
+    container = harness.charm.unit.get_container(CONTAINER)
+
+    class _Check:
+        status = CheckStatus.UP
+
+    monkeypatch.setattr(container, "get_check", lambda _name: _Check())
+    harness.charm.on.update_status.emit()
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert "N8N_DEFAULT_BINARY_DATA_MODE" not in env
+    assert harness.charm.unit.status == ActiveStatus(STATUS_BINARY_DATA_FALLBACK)
+
+
+def test_binary_data_attached_yields_plain_active(harness, monkeypatch):
+    harness.add_storage(BINARY_DATA_STORAGE, attach=True)
+    _fully_ready(harness)
+    _mute_chown(harness, monkeypatch)
+    container = harness.charm.unit.get_container(CONTAINER)
+
+    class _Check:
+        status = CheckStatus.UP
+
+    monkeypatch.setattr(container, "get_check", lambda _name: _Check())
+    harness.charm.on.update_status.emit()
+
     assert harness.charm.unit.status == ActiveStatus()
+
+
+def test_binary_data_detach_clears_mode_in_storage_detaching_handler(harness, monkeypatch):
+    """Detach must rebuild the Pebble layer without N8N_DEFAULT_BINARY_DATA_MODE.
+
+    NOTE: We assert immediately after `detach_storage()` because that is when
+    the `storage-detaching` event fires. Harness does not invalidate the
+    StorageMapping cache on detach (asymmetric with `attach_storage` which
+    does), so a *subsequent* reconcile in the same test would incorrectly see
+    the storage as still attached. Real Juju re-queries storage-list each
+    reconcile, so this Harness quirk does not exist in production.
+    """
+    storage_ids = harness.add_storage(BINARY_DATA_STORAGE, attach=True)
+    _fully_ready(harness)
+    _mute_chown(harness, monkeypatch)
+    container = harness.charm.unit.get_container(CONTAINER)
+
+    class _Check:
+        status = CheckStatus.UP
+
+    monkeypatch.setattr(container, "get_check", lambda _name: _Check())
+    harness.charm.on.update_status.emit()
+    assert harness.charm.unit.status == ActiveStatus()
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert env["N8N_DEFAULT_BINARY_DATA_MODE"] == "filesystem"
+
+    harness.detach_storage(storage_ids[0])
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert "N8N_DEFAULT_BINARY_DATA_MODE" not in env
+    assert harness.charm.unit.status == ActiveStatus(STATUS_BINARY_DATA_FALLBACK)
