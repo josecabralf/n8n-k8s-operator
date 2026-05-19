@@ -445,6 +445,59 @@ def test_pebble_check_failed_re_evaluates(harness, monkeypatch):
     assert harness.charm.unit.status == MaintenanceStatus(STATUS_WAITING_N8N)
 
 
+# --- Tier 2 SMTP configs (issue #7) ---
+
+
+def test_smtp_full_config_with_granted_secret_emits_env(harness):
+    _fully_ready(harness)
+    secret_id = harness.add_user_secret({"value": "smtp-pw"})
+    harness.grant_secret(secret_id, APP_NAME)
+    harness.update_config(
+        {
+            "smtp-host": "smtp.example.com",
+            "smtp-port": 2525,
+            "smtp-user": "bot",
+            "smtp-password": secret_id,
+            "smtp-sender": "n8n <bot@x>",
+            "smtp-ssl-tls": True,
+        }
+    )
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert env["N8N_SMTP_HOST"] == "smtp.example.com"
+    assert env["N8N_SMTP_PORT"] == "2525"
+    assert env["N8N_SMTP_USER"] == "bot"
+    assert env["N8N_SMTP_PASSWORD"] == "smtp-pw"
+    assert env["N8N_SMTP_SSL"] == "true"
+    assert env["N8N_SMTP_SENDER"] == "n8n <bot@x>"
+
+
+def test_smtp_password_ungranted_secret_blocks(harness):
+    _fully_ready(harness)
+    secret_id = harness.add_user_secret({"value": "smtp-pw"})
+    # Do NOT grant.
+    harness.update_config({"smtp-password": secret_id})
+
+    assert harness.charm.unit.status == BlockedStatus("smtp-password secret not granted to app")
+
+
+def test_smtp_partial_config_blocks(harness):
+    _fully_ready(harness)
+    harness.update_config({"smtp-host": "foo"})
+
+    assert harness.charm.unit.status == BlockedStatus(
+        "smtp-host, smtp-user, and smtp-password must all be set together"
+    )
+
+
+def test_smtp_unconfigured_omits_env(harness):
+    _fully_ready(harness)
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    for key in env:
+        assert not key.startswith("N8N_SMTP_"), f"unexpected SMTP key: {key}"
+
+
 def test_status_active_after_action(harness, monkeypatch):
     monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: False)
     _fully_ready(harness)

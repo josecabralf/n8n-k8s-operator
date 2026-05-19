@@ -18,7 +18,7 @@ from ops import main, pebble
 from ops.charm import CharmBase
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
 
-from pebble import build_layer, build_tier1_env, build_url_env
+from pebble import build_layer, build_smtp_env, build_tier1_env, build_url_env
 from state import PEER_RELATION_NAME, CharmState
 
 logger = logging.getLogger(__name__)
@@ -198,6 +198,26 @@ class N8nK8sCharm(CharmBase):
 
         event.set_results({"created": True, "email": email})
 
+    def _resolve_secret_uri(self, config_name: str) -> tuple[str | None, str | None]:
+        """Look up a Juju secret referenced by a config option.
+
+        Returns (value, None) when the secret is present and exposes a 'value'
+        field; (None, blocked_msg) when the URI is set but not granted or
+        malformed; (None, None) when the config is empty.
+        """
+        uri = self.config.get(config_name)
+        if not uri:
+            return (None, None)
+        try:
+            secret = self.model.get_secret(id=uri)
+            content = secret.get_content(refresh=True)
+        except (ops.SecretNotFoundError, ops.ModelError):
+            return (None, f"{config_name} secret not granted to app")
+        value = content.get("value")
+        if not value:
+            return (None, f"{config_name} secret missing 'value' field")
+        return (value, None)
+
     def _effective_encryption_key(self) -> tuple[str | None, str | None]:
         """Return (key, blocked_msg).
 
@@ -205,17 +225,11 @@ class N8nK8sCharm(CharmBase):
         - (None, msg): terminal Blocked condition.
         - (None, None): not-yet-ready; caller should emit WaitingStatus.
         """
-        override = self.config.get(ENCRYPTION_KEY_CONFIG)
-        if override:
-            try:
-                secret = self.model.get_secret(id=override)
-                content = secret.get_content(refresh=True)
-            except (ops.SecretNotFoundError, ops.ModelError):
-                return (None, "encryption-key secret not granted to app")
-            value = content.get("value")
-            if not value:
-                return (None, "encryption-key secret missing 'value' field")
-            return (value, None)
+        override, blocked_msg = self._resolve_secret_uri(ENCRYPTION_KEY_CONFIG)
+        if blocked_msg is not None:
+            return (None, blocked_msg)
+        if override is not None:
+            return (override, None)
 
         state = CharmState(self)
         if state.peer_relation is None:
@@ -256,6 +270,16 @@ class N8nK8sCharm(CharmBase):
             self.unit.status = BlockedStatus(tier1_err)
             return
 
+        smtp_pw, smtp_pw_err = self._resolve_secret_uri("smtp-password")
+        if smtp_pw_err is not None:
+            self.unit.status = BlockedStatus(smtp_pw_err)
+            return
+
+        smtp_env, smtp_err = build_smtp_env(self.config, smtp_pw)
+        if smtp_err is not None:
+            self.unit.status = BlockedStatus(smtp_err)
+            return
+
         db_env = self._db_env()
         if db_env is None:
             if self.model.get_relation(DB_RELATION_NAME) is None:
@@ -291,6 +315,7 @@ class N8nK8sCharm(CharmBase):
                 key,
                 url_env=build_url_env(url),
                 tier1_env=tier1_env,
+                smtp_env=smtp_env,
                 metrics_env=metrics_env,
                 binary_data_mode=binary_data_mode,
             ),
