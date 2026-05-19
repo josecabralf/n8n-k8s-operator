@@ -47,6 +47,10 @@ storage:
     minimum-size: 1G
 
 requires:
+  logging:
+    interface: loki_push_api
+    limit: 1
+    optional: true
   postgresql:
     interface: postgresql_client
     limit: 1
