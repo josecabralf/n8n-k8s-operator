@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
 from ops.pebble import CheckStatus
@@ -613,3 +615,111 @@ def test_binary_data_detach_clears_mode_in_storage_detaching_handler(harness, mo
     env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
     assert "N8N_DEFAULT_BINARY_DATA_MODE" not in env
     assert harness.charm.unit.status == ActiveStatus(STATUS_BINARY_DATA_FALLBACK)
+
+
+# --- S3 binary-data backing (issue #10) ---
+
+S3_RELATION = "s3"
+S3_PROVIDER_APP = "s3-integrator"
+S3_CREDS = {
+    "endpoint": "http://minio.example:9000",
+    "bucket": "n8n-k8s",
+    "region": "us-east-1",
+    "access-key": "AKIA-SENTINEL",
+    "secret-key": "SECRET-SENTINEL",
+}
+
+S3_ENV_KEYS = (
+    "N8N_EXTERNAL_STORAGE_S3_HOST",
+    "N8N_EXTERNAL_STORAGE_S3_BUCKET_NAME",
+    "N8N_EXTERNAL_STORAGE_S3_BUCKET_REGION",
+    "N8N_EXTERNAL_STORAGE_S3_ACCESS_KEY",
+    "N8N_EXTERNAL_STORAGE_S3_ACCESS_SECRET",
+)
+
+
+def _add_s3(harness: Harness, data: dict | None = S3_CREDS) -> int:
+    rel_id = harness.add_relation(S3_RELATION, S3_PROVIDER_APP)
+    if data:
+        harness.update_relation_data(rel_id, S3_PROVIDER_APP, data)
+    return rel_id
+
+
+def _force_check_up(monkeypatch) -> None:
+    """Patch Container.get_check so the ready check reports UP across reconciles."""
+    from ops.model import Container
+
+    class _Check:
+        status = CheckStatus.UP
+
+    monkeypatch.setattr(Container, "get_check", lambda self, _name: _Check())
+
+
+def test_s3_relation_sets_s3_mode_and_env(harness, monkeypatch):
+    _fully_ready(harness)
+    _add_s3(harness)
+    _force_check_up(monkeypatch)
+    harness.charm.on.update_status.emit()
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert env["N8N_DEFAULT_BINARY_DATA_MODE"] == "s3"
+    assert env["N8N_AVAILABLE_BINARY_DATA_MODES"] == "filesystem,s3"
+    for key in S3_ENV_KEYS:
+        assert key in env
+    assert harness.charm.unit.status == ActiveStatus()
+
+
+def test_s3_with_storage_attached_s3_wins_with_idle_mount_status(harness, monkeypatch):
+    harness.add_storage(BINARY_DATA_STORAGE, attach=True)
+    _fully_ready(harness)
+    _mute_chown(harness, monkeypatch)
+    _add_s3(harness)
+    _force_check_up(monkeypatch)
+    harness.charm.on.update_status.emit()
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert env["N8N_DEFAULT_BINARY_DATA_MODE"] == "s3"
+    assert harness.charm.unit.status == ActiveStatus("binary data: s3 (storage mount idle)")
+
+
+def test_s3_relation_departed_reverts_to_filesystem(harness, monkeypatch):
+    harness.add_storage(BINARY_DATA_STORAGE, attach=True)
+    _fully_ready(harness)
+    _mute_chown(harness, monkeypatch)
+    rel_id = _add_s3(harness)
+    _force_check_up(monkeypatch)
+    harness.charm.on.update_status.emit()
+
+    harness.remove_relation(rel_id)
+    harness.charm.on.update_status.emit()
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert env["N8N_DEFAULT_BINARY_DATA_MODE"] == "filesystem"
+    for key in S3_ENV_KEYS:
+        assert key not in env
+    assert harness.charm.unit.status == ActiveStatus()
+
+
+def test_s3_relation_departed_reverts_to_fallback(harness, monkeypatch):
+    _fully_ready(harness)
+    rel_id = _add_s3(harness)
+    _force_check_up(monkeypatch)
+    harness.charm.on.update_status.emit()
+
+    harness.remove_relation(rel_id)
+    harness.charm.on.update_status.emit()
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert "N8N_DEFAULT_BINARY_DATA_MODE" not in env
+    assert harness.charm.unit.status == ActiveStatus(STATUS_BINARY_DATA_FALLBACK)
+
+
+def test_s3_credentials_not_logged_in_plaintext(harness, monkeypatch, caplog):
+    caplog.set_level(logging.DEBUG, logger="charm")
+    _fully_ready(harness)
+    _add_s3(harness)
+    _force_check_up(monkeypatch)
+    harness.charm.on.update_status.emit()
+
+    assert "AKIA-SENTINEL" not in caplog.text
+    assert "SECRET-SENTINEL" not in caplog.text
