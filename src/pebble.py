@@ -87,12 +87,37 @@ def build_tier1_env(
     return (env, None)
 
 
+S3_REQUIRED_KEYS = ("endpoint", "bucket", "region", "access-key", "secret-key")
+
+
+def build_s3_env(creds: Mapping[str, str]) -> dict[str, str]:
+    """Translate S3Requirer credentials into n8n env vars.
+
+    Returns ``{}`` when any of the five required keys is missing or
+    empty — the caller treats that as "S3 not yet ready" and skips
+    binary-data mode ``s3``. No validation beyond presence; the
+    s3-integrator provides what it has.
+    """
+    for key in S3_REQUIRED_KEYS:
+        if not creds.get(key):
+            return {}
+    return {
+        "N8N_AVAILABLE_BINARY_DATA_MODES": "filesystem,s3",
+        "N8N_EXTERNAL_STORAGE_S3_HOST": creds["endpoint"],
+        "N8N_EXTERNAL_STORAGE_S3_BUCKET_NAME": creds["bucket"],
+        "N8N_EXTERNAL_STORAGE_S3_BUCKET_REGION": creds["region"],
+        "N8N_EXTERNAL_STORAGE_S3_ACCESS_KEY": creds["access-key"],
+        "N8N_EXTERNAL_STORAGE_S3_ACCESS_SECRET": creds["secret-key"],
+    }
+
+
 def build_layer(
     db_env: Mapping[str, str],
     encryption_key: str = "",
     url_env: Mapping[str, str] | None = None,
     tier1_env: Mapping[str, str] | None = None,
     metrics_env: Mapping[str, str] | None = None,
+    s3_env: Mapping[str, str] | None = None,
     binary_data_mode: str | None = None,
 ) -> LayerDict:
     """Return a Pebble layer dict that runs n8n with the given DB env vars.
@@ -119,6 +144,10 @@ def build_layer(
             ``{"N8N_METRICS": "true"}`` when the ``metrics-endpoint``
             relation is present. Omit to leave n8n metrics disabled
             (n8n default — ``/metrics`` returns 404).
+        s3_env: Optional mapping of n8n S3 env vars produced by
+            ``build_s3_env`` from the ``s3`` relation. When set the
+            caller should also pass ``binary_data_mode="s3"``; an empty
+            mapping is treated as "S3 not yet ready" and omitted.
         binary_data_mode: If set, written as
             ``N8N_DEFAULT_BINARY_DATA_MODE``. Use ``"filesystem"`` when
             the binary-data storage is attached, ``"s3"`` when the s3
@@ -136,6 +165,8 @@ def build_layer(
         environment.update(url_env)
     if metrics_env:
         environment.update(metrics_env)
+    if s3_env:
+        environment.update(s3_env)
     if encryption_key:
         environment["N8N_ENCRYPTION_KEY"] = encryption_key
     if binary_data_mode:
