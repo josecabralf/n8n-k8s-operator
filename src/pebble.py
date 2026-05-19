@@ -2,16 +2,275 @@
 
 from __future__ import annotations
 
+import logging
+import re
 from collections.abc import Mapping
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, NamedTuple
 from urllib.parse import urlparse
 
+import yaml
 from ops.pebble import LayerDict
+
+logger = logging.getLogger(__name__)
 
 N8N_URL = "http://localhost:5678"
 
 VALID_LOG_LEVELS = frozenset({"debug", "info", "warn", "error"})
 VALID_SAVE_MODES = frozenset({"all", "none"})
+
+ENV_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+
+# Maps each charm-managed env var to operator remediation text. Used when a
+# user-supplied `environment` entry collides with a charm-managed env: the
+# value is dropped, status surfaces the conflict, and one warning per dropped
+# key is logged. Adding a new charm-managed env means adding a row here too;
+# otherwise the conflict warning falls back to a generic message.
+CHARM_MANAGED_ENV_ORIGIN: dict[str, str] = {
+    # Ingress-derived (traefik_route relation).
+    "N8N_HOST": "set by ingress relation",
+    "N8N_PROTOCOL": "set by ingress relation",
+    "N8N_PORT": "set by ingress relation",
+    "WEBHOOK_URL": "set by ingress relation",
+    "N8N_EDITOR_BASE_URL": "set by ingress relation",
+    # Postgres-derived (postgresql relation).
+    "DB_TYPE": "set by postgresql relation",
+    "DB_POSTGRESDB_HOST": "set by postgresql relation",
+    "DB_POSTGRESDB_PORT": "set by postgresql relation",
+    "DB_POSTGRESDB_DATABASE": "set by postgresql relation",
+    "DB_POSTGRESDB_USER": "set by postgresql relation",
+    "DB_POSTGRESDB_PASSWORD": "set by postgresql relation",
+    # Encryption key (auto-generated app secret / encryption-key config).
+    "N8N_ENCRYPTION_KEY": "managed by charm; use 'encryption-key' config to override",
+    # Metrics relation.
+    "N8N_METRICS": "set by metrics-endpoint relation",
+    # Binary-data + S3 (s3 relation / binary-data storage).
+    "N8N_DEFAULT_BINARY_DATA_MODE": "set by s3 relation or binary-data storage",
+    "N8N_AVAILABLE_BINARY_DATA_MODES": "set by s3 relation",
+    "N8N_EXTERNAL_STORAGE_S3_HOST": "set by s3 relation",
+    "N8N_EXTERNAL_STORAGE_S3_BUCKET_NAME": "set by s3 relation",
+    "N8N_EXTERNAL_STORAGE_S3_BUCKET_REGION": "set by s3 relation",
+    "N8N_EXTERNAL_STORAGE_S3_ACCESS_KEY": "set by s3 relation",
+    "N8N_EXTERNAL_STORAGE_S3_ACCESS_SECRET": "set by s3 relation",
+    # Tier 1 typed configs.
+    "N8N_LOG_LEVEL": "use 'juju config n8n-k8s log-level=...' instead",
+    "GENERIC_TIMEZONE": "use 'juju config n8n-k8s timezone=...' instead",
+    "TZ": "use 'juju config n8n-k8s timezone=...' instead",
+    "EXECUTIONS_DATA_PRUNE": "use 'juju config n8n-k8s executions-data-prune=...' instead",
+    "EXECUTIONS_DATA_MAX_AGE": "use 'juju config n8n-k8s executions-data-max-age-hours=...' instead",
+    "EXECUTIONS_DATA_SAVE_ON_ERROR": "use 'juju config n8n-k8s executions-data-save-on-error=...' instead",
+    "EXECUTIONS_DATA_SAVE_ON_SUCCESS": "use 'juju config n8n-k8s executions-data-save-on-success=...' instead",
+    "EXECUTIONS_DATA_SAVE_ON_PROGRESS": "use 'juju config n8n-k8s executions-data-save-on-progress=...' instead",
+    "N8N_USER_MANAGEMENT_DISABLED": "use 'juju config n8n-k8s disable-user-registration=...' instead",
+    # Tier 2 typed configs (SMTP).
+    "N8N_SMTP_HOST": "use 'juju config n8n-k8s smtp-host=...' instead",
+    "N8N_SMTP_PORT": "use 'juju config n8n-k8s smtp-port=...' instead",
+    "N8N_SMTP_USER": "use 'juju config n8n-k8s smtp-user=...' instead",
+    "N8N_SMTP_PASSWORD": "use 'juju config n8n-k8s smtp-password=...' instead",
+    "N8N_SMTP_SSL": "use 'juju config n8n-k8s smtp-ssl-tls=...' instead",
+    "N8N_SMTP_SENDER": "use 'juju config n8n-k8s smtp-sender=...' instead",
+}
+
+
+class EnvEntry(NamedTuple):
+    name: str
+    value: str
+
+
+class JujuEntry(NamedTuple):
+    secret_id: str
+    name: str
+    key: str
+
+
+class VaultEntry(NamedTuple):
+    path: str
+    name: str
+    key: str
+
+
+@dataclass(frozen=True)
+class ParsedEnvironment:
+    """Parsed shape of the `environment` config option (issue #8).
+
+    `vault` is schema-validated but not resolved at runtime in v1; vault
+    runtime wiring lands in the sibling vault-k8s issue.
+    """
+
+    env: list[EnvEntry] = field(default_factory=list)
+    juju: list[JujuEntry] = field(default_factory=list)
+    vault: list[VaultEntry] = field(default_factory=list)
+
+
+_ALLOWED_TOP_KEYS = ("env", "juju", "vault")
+
+
+def _require_str(value: Any, field_name: str, entry_label: str) -> tuple[str | None, str | None]:
+    if not isinstance(value, str) or not value:
+        return (None, f"{entry_label} '{field_name}' must be a non-empty string")
+    return (value, None)
+
+
+def _validate_name(name_value: Any, entry_label: str) -> tuple[str | None, str | None]:
+    if not isinstance(name_value, str) or not ENV_NAME_RE.match(name_value):
+        return (
+            None,
+            f"{entry_label} 'name' must match [A-Z_][A-Z0-9_]* (got {name_value!r})",
+        )
+    return (name_value, None)
+
+
+def parse_environment_config(yaml_str: str) -> tuple[ParsedEnvironment | None, str | None]:
+    """Parse the `environment` config option into a ParsedEnvironment.
+
+    Empty input parses to an empty ParsedEnvironment. On schema failure
+    returns (None, msg); the caller surfaces ``msg`` as a BlockedStatus.
+
+    `env:` entries: ``{name: str, value: str}``. ``value`` coerced via ``str()``.
+    `juju:` entries: ``{secret-id: str, name: str, key: str}``.
+    `vault:` entries: ``{path: str, name: str, key: str}`` (schema-only in v1).
+    `name` must match ``[A-Z_][A-Z0-9_]*``. Duplicate ``name`` within the
+    same source is a parse error (always a typo); cross-source collisions
+    are allowed and resolved by precedence in ``build_environment_user_env``.
+    """
+    text = (yaml_str or "").strip()
+    if not text:
+        return (ParsedEnvironment(), None)
+
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        return (None, f"environment config: malformed YAML ({exc.__class__.__name__})")
+
+    if not isinstance(raw, Mapping):
+        return (None, "environment config: top-level YAML must be a mapping")
+
+    unknown = [k for k in raw if k not in _ALLOWED_TOP_KEYS]
+    if unknown:
+        return (
+            None,
+            f"environment config: unsupported top-level key(s) {unknown!r}; " f"allowed: {list(_ALLOWED_TOP_KEYS)}",
+        )
+
+    env_entries: list[EnvEntry] = []
+    juju_entries: list[JujuEntry] = []
+    vault_entries: list[VaultEntry] = []
+
+    if "env" in raw:
+        items = raw["env"]
+        if not isinstance(items, list):
+            return (None, "environment config: 'env' must be a list of mappings")
+        seen: set[str] = set()
+        for idx, item in enumerate(items):
+            label = f"environment config: env[{idx}]"
+            if not isinstance(item, Mapping):
+                return (None, f"{label} must be a mapping with 'name' and 'value'")
+            name, err = _validate_name(item.get("name"), label)
+            if err is not None:
+                return (None, f"environment config: {err}")
+            if "value" not in item:
+                return (None, f"{label} missing required field 'value'")
+            value = str(item["value"])
+            if name in seen:
+                return (None, f"environment config: duplicate env entry name '{name}'")
+            seen.add(name)
+            env_entries.append(EnvEntry(name=name, value=value))
+
+    if "juju" in raw:
+        items = raw["juju"]
+        if not isinstance(items, list):
+            return (None, "environment config: 'juju' must be a list of mappings")
+        seen = set()
+        for idx, item in enumerate(items):
+            label = f"environment config: juju[{idx}]"
+            if not isinstance(item, Mapping):
+                return (None, f"{label} must be a mapping with 'secret-id', 'name', 'key'")
+            secret_id, err = _require_str(item.get("secret-id"), "secret-id", label)
+            if err is not None:
+                return (None, f"environment config: {err}")
+            name, err = _validate_name(item.get("name"), label)
+            if err is not None:
+                return (None, f"environment config: {err}")
+            key, err = _require_str(item.get("key"), "key", label)
+            if err is not None:
+                return (None, f"environment config: {err}")
+            if name in seen:
+                return (None, f"environment config: duplicate juju entry name '{name}'")
+            seen.add(name)
+            juju_entries.append(JujuEntry(secret_id=secret_id, name=name, key=key))
+
+    if "vault" in raw:
+        items = raw["vault"]
+        if not isinstance(items, list):
+            return (None, "environment config: 'vault' must be a list of mappings")
+        seen = set()
+        for idx, item in enumerate(items):
+            label = f"environment config: vault[{idx}]"
+            if not isinstance(item, Mapping):
+                return (None, f"{label} must be a mapping with 'path', 'name', 'key'")
+            path, err = _require_str(item.get("path"), "path", label)
+            if err is not None:
+                return (None, f"environment config: {err}")
+            name, err = _validate_name(item.get("name"), label)
+            if err is not None:
+                return (None, f"environment config: {err}")
+            key, err = _require_str(item.get("key"), "key", label)
+            if err is not None:
+                return (None, f"environment config: {err}")
+            if name in seen:
+                return (None, f"environment config: duplicate vault entry name '{name}'")
+            seen.add(name)
+            vault_entries.append(VaultEntry(path=path, name=name, key=key))
+
+    return (
+        ParsedEnvironment(env=env_entries, juju=juju_entries, vault=vault_entries),
+        None,
+    )
+
+
+def build_environment_user_env(
+    parsed: ParsedEnvironment,
+    resolved_juju: Mapping[str, str],
+    resolved_vault: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Merge user-supplied env entries into a flat {name: value} dict.
+
+    Precedence within user-supplied entries (highest wins): vault > juju > env.
+    Rationale: more-deliberate / more-secret sources override less-deliberate
+    ones, so operators can migrate an `env:` plaintext entry to a `juju:`
+    secret (or later a `vault:` entry) by adding the new entry without
+    deleting the old one in the same step.
+
+    In v1 (#8) `resolved_vault` is always empty, so the operative rule is
+    `juju > env`. The vault parameter exists so the sibling vault-k8s issue
+    is purely additive — no signature churn.
+
+    Duplicates within the same source are already rejected at parse time
+    (see ``parse_environment_config``).
+    """
+    resolved_vault = resolved_vault or {}
+    result: dict[str, str] = {}
+    sources: dict[str, str] = {}
+
+    def _set(name: str, value: str, source: str) -> None:
+        if name in result:
+            logger.debug(
+                "environment: '%s' from %s overrides earlier entry from %s",
+                name,
+                source,
+                sources[name],
+            )
+        result[name] = value
+        sources[name] = source
+
+    for entry in parsed.env:
+        _set(entry.name, entry.value, "env")
+    for name, value in resolved_juju.items():
+        _set(name, value, "juju")
+    for name, value in resolved_vault.items():
+        _set(name, value, "vault")
+
+    return result
 
 
 def build_url_env(external_url: str) -> dict[str, str]:
@@ -156,7 +415,8 @@ def build_layer(
     metrics_env: Mapping[str, str] | None = None,
     s3_env: Mapping[str, str] | None = None,
     binary_data_mode: str | None = None,
-) -> LayerDict:
+    user_env: Mapping[str, str] | None = None,
+) -> tuple[LayerDict, list[str]]:
     """Return a Pebble layer dict that runs n8n with the given DB env vars.
 
     Args:
@@ -196,27 +456,43 @@ def build_layer(
             relation is wired up. When ``None``, the variable is omitted
             and n8n falls back to in-DB storage.
 
-    Returns:
-        A Pebble LayerDict with one service (``n8n``) plus an alive HTTP
-        check on /healthz and a ready HTTP check on /healthz/readiness.
-    """
-    environment: dict[str, str] = dict(db_env)
-    if tier1_env:
-        environment.update(tier1_env)
-    if smtp_env:
-        environment.update(smtp_env)
-    if url_env:
-        environment.update(url_env)
-    if metrics_env:
-        environment.update(metrics_env)
-    if s3_env:
-        environment.update(s3_env)
-    if encryption_key:
-        environment["N8N_ENCRYPTION_KEY"] = encryption_key
-    if binary_data_mode:
-        environment["N8N_DEFAULT_BINARY_DATA_MODE"] = binary_data_mode
+        user_env: Optional mapping of user-supplied env vars from the
+            Tier 3 ``environment`` config (issue #8). Applied **first**
+            so all subsequent charm-managed envs (DB, tier1/2, ingress,
+            metrics, S3, encryption key, binary-data) naturally override
+            on collision. Conflicting keys are returned in the second
+            tuple element so the caller can surface a status warning.
 
-    return {
+    Returns:
+        A tuple of (LayerDict, conflict_keys). The LayerDict carries one
+        service (``n8n``) plus an alive HTTP check on /healthz and a
+        ready HTTP check on /healthz/readiness. ``conflict_keys`` is the
+        sorted list of user_env keys that were overridden by charm-managed
+        envs; empty when there's no conflict (or no user_env).
+    """
+    charm_managed: dict[str, str] = dict(db_env)
+    if tier1_env:
+        charm_managed.update(tier1_env)
+    if smtp_env:
+        charm_managed.update(smtp_env)
+    if url_env:
+        charm_managed.update(url_env)
+    if metrics_env:
+        charm_managed.update(metrics_env)
+    if s3_env:
+        charm_managed.update(s3_env)
+    if encryption_key:
+        charm_managed["N8N_ENCRYPTION_KEY"] = encryption_key
+    if binary_data_mode:
+        charm_managed["N8N_DEFAULT_BINARY_DATA_MODE"] = binary_data_mode
+
+    # user_env applied first so charm-managed envs naturally override on
+    # collision; conflicts = keys that appear in both regardless of value.
+    environment: dict[str, str] = dict(user_env) if user_env else {}
+    environment.update(charm_managed)
+    conflicts = sorted(set(user_env or {}).intersection(charm_managed))
+
+    layer: LayerDict = {
         "summary": "n8n workload layer",
         "description": "Runs n8n against the related PostgreSQL.",
         "services": {
@@ -244,3 +520,4 @@ def build_layer(
             },
         },
     }
+    return layer, conflicts

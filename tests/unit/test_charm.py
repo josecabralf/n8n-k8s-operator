@@ -723,3 +723,152 @@ def test_s3_credentials_not_logged_in_plaintext(harness, monkeypatch, caplog):
 
     assert "AKIA-SENTINEL" not in caplog.text
     assert "SECRET-SENTINEL" not in caplog.text
+
+
+# --- Tier 3 environment config (issue #8) ---
+
+
+def test_environment_env_entry_present_in_plan(harness):
+    _fully_ready(harness)
+    harness.update_config({"environment": "env:\n  - name: N8N_PUSH_BACKEND\n    value: websocket\n"})
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert env["N8N_PUSH_BACKEND"] == "websocket"
+    assert harness.charm.unit.status == ActiveStatus(STATUS_BINARY_DATA_FALLBACK)
+
+
+def test_environment_juju_entry_with_granted_secret_resolves(harness):
+    _fully_ready(harness)
+    secret_id = harness.add_user_secret({"token": "abc123"})
+    harness.grant_secret(secret_id, APP_NAME)
+    harness.update_config(
+        {"environment": ("juju:\n" f"  - secret-id: {secret_id}\n" "    name: N8N_API_TOKEN\n" "    key: token\n")}
+    )
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert env["N8N_API_TOKEN"] == "abc123"
+
+
+def test_environment_atomic_juju_failure_blocks_and_skips_user_env(harness):
+    _fully_ready(harness)
+    granted_id = harness.add_user_secret({"token": "ok"})
+    harness.grant_secret(granted_id, APP_NAME)
+    ungranted_id = harness.add_user_secret({"token": "blocked"})
+    # Do NOT grant ungranted_id.
+    harness.update_config(
+        {
+            "environment": (
+                "juju:\n"
+                f"  - secret-id: {granted_id}\n"
+                "    name: N8N_GOOD\n"
+                "    key: token\n"
+                f"  - secret-id: {ungranted_id}\n"
+                "    name: N8N_BAD\n"
+                "    key: token\n"
+            )
+        }
+    )
+
+    assert harness.charm.unit.status == BlockedStatus("environment juju entry 'N8N_BAD': secret not granted")
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    # Atomic: even the granted entry is skipped.
+    assert "N8N_GOOD" not in env
+    assert "N8N_BAD" not in env
+    # Workload-side charm-managed envs still applied.
+    for k, v in EXPECTED_DB_ENV.items():
+        assert env[k] == v
+
+
+def test_environment_juju_entry_with_missing_key_blocks(harness):
+    _fully_ready(harness)
+    secret_id = harness.add_user_secret({"other-key": "value"})
+    harness.grant_secret(secret_id, APP_NAME)
+    harness.update_config(
+        {"environment": ("juju:\n" f"  - secret-id: {secret_id}\n" "    name: N8N_X\n" "    key: missing-key\n")}
+    )
+
+    assert harness.charm.unit.status == BlockedStatus("environment juju entry 'N8N_X': key 'missing-key' not in secret")
+
+
+def test_environment_charm_managed_ingress_conflict_warns_in_status(harness, monkeypatch, caplog):
+    caplog.set_level(logging.WARNING, logger="charm")
+    _fully_ready(harness)
+    _force_check_up(monkeypatch)
+    harness.update_config({"environment": "env:\n  - name: N8N_HOST\n    value: hacked\n"})
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    # Charm-managed value wins.
+    assert env["N8N_HOST"] == "traefik.local"
+    # Active with conflict + binary-data fallback joined by " | ".
+    status = harness.charm.unit.status
+    assert isinstance(status, ActiveStatus)
+    assert "ignoring user env overrides: N8N_HOST" in status.message
+    assert "see juju debug-log" in status.message
+    assert "binary data in DB" in status.message
+    assert " | " in status.message
+    # Debug-log warning with remediation hint.
+    assert "N8N_HOST" in caplog.text
+    assert "ingress relation" in caplog.text
+
+
+def test_environment_charm_managed_tier1_conflict_hints_at_config(harness, monkeypatch, caplog):
+    caplog.set_level(logging.WARNING, logger="charm")
+    _fully_ready(harness)
+    _force_check_up(monkeypatch)
+    harness.update_config({"environment": "env:\n  - name: N8N_LOG_LEVEL\n    value: debug\n"})
+
+    status = harness.charm.unit.status
+    assert isinstance(status, ActiveStatus)
+    assert "ignoring user env overrides: N8N_LOG_LEVEL" in status.message
+    assert "N8N_LOG_LEVEL" in caplog.text
+    assert "log-level" in caplog.text
+
+
+def test_environment_removing_conflict_returns_to_clean_active(harness, monkeypatch):
+    harness.add_storage(BINARY_DATA_STORAGE, attach=True)
+    _fully_ready(harness)
+    _mute_chown(harness, monkeypatch)
+    _force_check_up(monkeypatch)
+    harness.update_config({"environment": "env:\n  - name: N8N_HOST\n    value: hacked\n"})
+
+    status = harness.charm.unit.status
+    assert isinstance(status, ActiveStatus)
+    assert "ignoring user env overrides" in status.message
+
+    harness.update_config({"environment": ""})
+    assert harness.charm.unit.status == ActiveStatus()
+
+
+def test_environment_invalid_yaml_blocks(harness):
+    _fully_ready(harness)
+    harness.update_config({"environment": "env: [unclosed"})
+
+    status = harness.charm.unit.status
+    assert isinstance(status, BlockedStatus)
+    assert "environment config" in status.message
+    assert "malformed YAML" in status.message
+
+
+def test_environment_vault_entry_is_no_op_with_debug_log(harness, monkeypatch, caplog):
+    caplog.set_level(logging.DEBUG, logger="charm")
+    _fully_ready(harness)
+    _force_check_up(monkeypatch)
+    harness.update_config(
+        {"environment": ("vault:\n" "  - path: kv/n8n\n" "    name: N8N_VAULT_X\n" "    key: secret\n")}
+    )
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    # No runtime injection in v1.
+    assert "N8N_VAULT_X" not in env
+    # Debug log fires with sibling-issue reference.
+    assert "N8N_VAULT_X" in caplog.text
+    assert "not wired in v1" in caplog.text
+
+
+def test_environment_unsupported_top_level_key_blocks(harness):
+    _fully_ready(harness)
+    harness.update_config({"environment": "random:\n  - x\n"})
+
+    status = harness.charm.unit.status
+    assert isinstance(status, BlockedStatus)
+    assert "unsupported top-level key" in status.message

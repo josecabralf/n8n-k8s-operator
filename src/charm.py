@@ -21,11 +21,14 @@ from ops.charm import CharmBase
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
 
 from pebble import (
+    CHARM_MANAGED_ENV_ORIGIN,
+    build_environment_user_env,
     build_layer,
     build_s3_env,
     build_smtp_env,
     build_tier1_env,
     build_url_env,
+    parse_environment_config,
 )
 from state import PEER_RELATION_NAME, CharmState
 
@@ -42,6 +45,10 @@ N8N_PORT = 5678
 
 ENCRYPTION_KEY_SECRET_LABEL = "n8n-encryption-key"
 ENCRYPTION_KEY_CONFIG = "encryption-key"
+ENVIRONMENT_CONFIG = "environment"
+# Filled in once the sibling vault-k8s issue exists; used in the parse-time
+# debug log and the charmcraft `environment` config description.
+VAULT_SIBLING_ISSUE = "TBD"
 
 BINARY_DATA_STORAGE_NAME = "binary-data"
 BINARY_DATA_MOUNT_PATH = "/home/node/.n8n/binaryData"
@@ -277,6 +284,31 @@ class N8nK8sCharm(CharmBase):
             return (None, "stored encryption-key secret missing 'value' field")
         return (value, None)
 
+    def _resolve_juju_entries(self, entries) -> tuple[dict[str, str] | None, str | None]:
+        """Resolve each environment.juju entry into a flat {name: value} dict.
+
+        Atomic: any single failure returns (None, msg) and the caller
+        skips user_env entirely so the workload still runs on
+        charm-managed envs while the unit sits in BlockedStatus.
+        """
+        resolved: dict[str, str] = {}
+        for entry in entries:
+            try:
+                secret = self.model.get_secret(id=entry.secret_id)
+                content = secret.get_content(refresh=True)
+            except (ops.SecretNotFoundError, ops.ModelError):
+                return (
+                    None,
+                    f"environment juju entry '{entry.name}': secret not granted",
+                )
+            if entry.key not in content:
+                return (
+                    None,
+                    f"environment juju entry '{entry.name}': key '{entry.key}' not in secret",
+                )
+            resolved[entry.name] = content[entry.key]
+        return (resolved, None)
+
     def _reconcile(self, *, binary_data_detaching: bool = False) -> None:
         key, blocked_msg = self._effective_encryption_key()
         if blocked_msg is not None:
@@ -300,6 +332,27 @@ class N8nK8sCharm(CharmBase):
         if smtp_err is not None:
             self.unit.status = BlockedStatus(smtp_err)
             return
+
+        parsed_env, env_err = parse_environment_config(str(self.config.get(ENVIRONMENT_CONFIG, "")))
+        if env_err is not None:
+            self.unit.status = BlockedStatus(env_err)
+            return
+        assert parsed_env is not None  # for type narrowing
+        for vault_entry in parsed_env.vault:
+            logger.debug(
+                "environment vault entry '%s' declared but not wired in v1; tracked in issue #%s",
+                vault_entry.name,
+                VAULT_SIBLING_ISSUE,
+            )
+        resolved_juju, juju_err = self._resolve_juju_entries(parsed_env.juju)
+        user_env: dict[str, str] | None
+        if juju_err is not None:
+            user_env_blocked_msg = juju_err
+            user_env = None
+        else:
+            user_env_blocked_msg = None
+            assert resolved_juju is not None
+            user_env = build_environment_user_env(parsed_env, resolved_juju)
 
         db_env = self._db_env()
         if db_env is None:
@@ -336,21 +389,23 @@ class N8nK8sCharm(CharmBase):
         if binary_data_attached:
             self._chown_binary_data_mount(container)
         metrics_env = {"N8N_METRICS": "true"} if self.model.get_relation(METRICS_RELATION_NAME) is not None else None
-        container.add_layer(
-            CONTAINER_NAME,
-            build_layer(
-                db_env,
-                key,
-                url_env=build_url_env(url),
-                tier1_env=tier1_env,
-                smtp_env=smtp_env,
-                metrics_env=metrics_env,
-                s3_env=s3_env,
-                binary_data_mode=binary_data_mode,
-            ),
-            combine=True,
+        layer, conflict_keys = build_layer(
+            db_env,
+            key,
+            url_env=build_url_env(url),
+            tier1_env=tier1_env,
+            smtp_env=smtp_env,
+            metrics_env=metrics_env,
+            s3_env=s3_env,
+            binary_data_mode=binary_data_mode,
+            user_env=user_env,
         )
+        container.add_layer(CONTAINER_NAME, layer, combine=True)
         container.replan()
+
+        for k in conflict_keys:
+            origin = CHARM_MANAGED_ENV_ORIGIN.get(k, "charm-managed")
+            logger.warning("environment: dropping %s (%s)", k, origin)
 
         try:
             ready = container.get_check("ready").status == pebble.CheckStatus.UP
@@ -360,14 +415,20 @@ class N8nK8sCharm(CharmBase):
             self.unit.status = MaintenanceStatus(STATUS_WAITING_N8N)
             return
 
+        if user_env_blocked_msg is not None:
+            self.unit.status = BlockedStatus(user_env_blocked_msg)
+            return
+
+        status_parts: list[str] = []
+        if conflict_keys:
+            status_parts.append(
+                f"ignoring user env overrides: {', '.join(conflict_keys)} " "(charm-managed; see juju debug-log)"
+            )
         if s3_creds and binary_data_attached:
-            self.unit.status = ActiveStatus("binary data: s3 (storage mount idle)")
-        elif s3_creds:
-            self.unit.status = ActiveStatus()
-        elif binary_data_attached:
-            self.unit.status = ActiveStatus()
-        else:
-            self.unit.status = ActiveStatus(STATUS_BINARY_DATA_FALLBACK)
+            status_parts.append("binary data: s3 (storage mount idle)")
+        elif not s3_creds and not binary_data_attached:
+            status_parts.append(STATUS_BINARY_DATA_FALLBACK)
+        self.unit.status = ActiveStatus(" | ".join(status_parts))
 
     def _probe_owner_setup(self) -> bool | None:
         """True → owner exists; False → not yet; None → cannot tell."""
