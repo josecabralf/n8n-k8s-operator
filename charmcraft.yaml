@@ -107,6 +107,44 @@ config:
       description: |
         If true, disables n8n public user signup. Sets
         N8N_USER_MANAGEMENT_DISABLED.
+    smtp-host:
+      type: string
+      default: ""
+      description: |
+        SMTP server hostname. Sets N8N_SMTP_HOST. Required together with
+        smtp-user and smtp-password to enable outbound mail.
+    smtp-port:
+      type: int
+      default: 587
+      description: |
+        SMTP server port. Sets N8N_SMTP_PORT. Must be 1–65535. Default
+        587 (submission). Used only when smtp-host/user/password are set.
+    smtp-user:
+      type: string
+      default: ""
+      description: |
+        SMTP authentication username. Sets N8N_SMTP_USER. Required
+        together with smtp-host and smtp-password.
+    smtp-password:
+      type: secret
+      default: ""
+      description: |
+        Juju user-secret URI (secret:<id>) containing the SMTP password
+        under field 'value'. Required together with smtp-host and
+        smtp-user. Must be granted to this app
+        (`juju grant-secret <id> n8n-k8s`).
+    smtp-sender:
+      type: string
+      default: ""
+      description: |
+        Envelope From address for outbound mail. Sets N8N_SMTP_SENDER.
+        Optional; if empty the variable is omitted.
+    smtp-ssl-tls:
+      type: boolean
+      default: false
+      description: |
+        If true, use implicit TLS for SMTP (port 465 style). Sets
+        N8N_SMTP_SSL.
 
 actions:
   get-encryption-key:
