@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pebble import build_layer, build_s3_env, build_tier1_env, build_url_env
+from pebble import build_layer, build_s3_env, build_smtp_env, build_tier1_env, build_url_env
 
 S3_CREDS = {
     "endpoint": "http://minio.example:9000",
@@ -300,3 +300,101 @@ def test_build_layer_without_s3_env_omits_s3_keys():
         "N8N_EXTERNAL_STORAGE_S3_ACCESS_SECRET",
     ):
         assert key not in env
+
+
+# --- Tier 2 SMTP env tests (issue #7) ---
+
+
+SMTP_FULL_CONFIG = {
+    "smtp-host": "smtp.example.com",
+    "smtp-port": 2525,
+    "smtp-user": "bot",
+    "smtp-sender": "n8n <bot@example.com>",
+    "smtp-ssl-tls": False,
+}
+
+
+def test_build_smtp_env_unconfigured_returns_empty():
+    env, err = build_smtp_env({}, None)
+
+    assert err is None
+    assert env == {}
+
+
+def test_build_smtp_env_full_config_emits_all_vars():
+    env, err = build_smtp_env(SMTP_FULL_CONFIG, "pw")
+
+    assert err is None
+    assert env == {
+        "N8N_SMTP_HOST": "smtp.example.com",
+        "N8N_SMTP_PORT": "2525",
+        "N8N_SMTP_USER": "bot",
+        "N8N_SMTP_PASSWORD": "pw",
+        "N8N_SMTP_SSL": "false",
+        "N8N_SMTP_SENDER": "n8n <bot@example.com>",
+    }
+
+
+def test_build_smtp_env_host_only_blocks():
+    env, err = build_smtp_env({"smtp-host": "smtp.example.com"}, None)
+
+    assert env is None
+    assert err is not None
+    assert "must all be set together" in err
+
+
+def test_build_smtp_env_user_only_blocks():
+    env, err = build_smtp_env({"smtp-user": "bot"}, None)
+
+    assert env is None
+    assert err is not None
+    assert "must all be set together" in err
+
+
+def test_build_smtp_env_password_only_blocks():
+    env, err = build_smtp_env({}, "pw")
+
+    assert env is None
+    assert err is not None
+    assert "must all be set together" in err
+
+
+def test_build_smtp_env_port_out_of_range_blocks():
+    for bad_port in (0, 65536):
+        env, err = build_smtp_env({**SMTP_FULL_CONFIG, "smtp-port": bad_port}, "pw")
+
+        assert env is None
+        assert err is not None
+        assert "smtp-port" in err
+        assert str(bad_port) in err
+
+
+def test_build_smtp_env_sender_empty_omits_var():
+    env, err = build_smtp_env({**SMTP_FULL_CONFIG, "smtp-sender": ""}, "pw")
+
+    assert err is None
+    assert env is not None
+    assert "N8N_SMTP_SENDER" not in env
+
+
+def test_build_smtp_env_ssl_tls_true_sets_true():
+    env, err = build_smtp_env({**SMTP_FULL_CONFIG, "smtp-ssl-tls": True}, "pw")
+
+    assert err is None
+    assert env is not None
+    assert env["N8N_SMTP_SSL"] == "true"
+
+
+def test_build_layer_includes_smtp_env():
+    smtp_env = {
+        "N8N_SMTP_HOST": "h",
+        "N8N_SMTP_PORT": "2525",
+        "N8N_SMTP_USER": "u",
+        "N8N_SMTP_PASSWORD": "p",
+        "N8N_SMTP_SSL": "false",
+    }
+    layer = build_layer(DB_ENV, smtp_env=smtp_env)
+
+    environment = layer["services"]["n8n"]["environment"]
+    for k, v in smtp_env.items():
+        assert environment[k] == v

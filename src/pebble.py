@@ -111,11 +111,48 @@ def build_s3_env(creds: Mapping[str, str]) -> dict[str, str]:
     }
 
 
+def build_smtp_env(
+    config: Mapping[str, Any],
+    smtp_password: str | None,
+) -> tuple[dict[str, str] | None, str | None]:
+    """Translate Tier 2 SMTP configs into n8n env vars.
+
+    Returns ({}, None) when SMTP is unconfigured (all of host/user/password
+    empty); (env, None) when fully configured; (None, msg) when the
+    config is invalid (partial trio, port out of range).
+    """
+    host = str(config.get("smtp-host", "")).strip()
+    user = str(config.get("smtp-user", "")).strip()
+    pw_set = bool(smtp_password)
+
+    if not (host or user or pw_set):
+        return ({}, None)
+    if not (host and user and pw_set):
+        return (None, "smtp-host, smtp-user, and smtp-password must all be set together")
+
+    port = int(config.get("smtp-port", 587))
+    if not 1 <= port <= 65535:
+        return (None, f"invalid smtp-port '{port}'; must be 1–65535")
+
+    env = {
+        "N8N_SMTP_HOST": host,
+        "N8N_SMTP_PORT": str(port),
+        "N8N_SMTP_USER": user,
+        "N8N_SMTP_PASSWORD": smtp_password,
+        "N8N_SMTP_SSL": "true" if bool(config.get("smtp-ssl-tls", False)) else "false",
+    }
+    sender = str(config.get("smtp-sender", "")).strip()
+    if sender:
+        env["N8N_SMTP_SENDER"] = sender
+    return (env, None)
+
+
 def build_layer(
     db_env: Mapping[str, str],
     encryption_key: str = "",
     url_env: Mapping[str, str] | None = None,
     tier1_env: Mapping[str, str] | None = None,
+    smtp_env: Mapping[str, str] | None = None,
     metrics_env: Mapping[str, str] | None = None,
     s3_env: Mapping[str, str] | None = None,
     binary_data_mode: str | None = None,
@@ -140,6 +177,11 @@ def build_layer(
         tier1_env: Optional mapping of Tier 1 n8n env vars derived from
             charm config (logging, timezone, executions retention,
             user-management toggle).
+        smtp_env: Optional mapping of Tier 2 SMTP env vars (``N8N_SMTP_HOST``,
+            ``N8N_SMTP_PORT``, ``N8N_SMTP_USER``, ``N8N_SMTP_PASSWORD``,
+            ``N8N_SMTP_SSL`` and optionally ``N8N_SMTP_SENDER``). Merged
+            after ``tier1_env`` and before ``url_env`` so url-derived vars
+            still win on collision.
         metrics_env: Optional mapping of metrics env vars, typically
             ``{"N8N_METRICS": "true"}`` when the ``metrics-endpoint``
             relation is present. Omit to leave n8n metrics disabled
@@ -161,6 +203,8 @@ def build_layer(
     environment: dict[str, str] = dict(db_env)
     if tier1_env:
         environment.update(tier1_env)
+    if smtp_env:
+        environment.update(smtp_env)
     if url_env:
         environment.update(url_env)
     if metrics_env:
