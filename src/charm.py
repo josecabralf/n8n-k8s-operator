@@ -19,7 +19,13 @@ from ops import main, pebble
 from ops.charm import CharmBase
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
 
-from pebble import build_layer, build_s3_env, build_smtp_env, build_tier1_env, build_url_env
+from pebble import (
+    build_layer,
+    build_s3_env,
+    build_smtp_env,
+    build_tier1_env,
+    build_url_env,
+)
 from state import PEER_RELATION_NAME, CharmState
 
 logger = logging.getLogger(__name__)

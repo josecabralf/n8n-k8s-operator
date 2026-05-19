@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from pebble import build_layer, build_s3_env, build_smtp_env, build_tier1_env, build_url_env
+from pebble import (
+    build_layer,
+    build_s3_env,
+    build_smtp_env,
+    build_tier1_env,
+    build_url_env,
+)
 
 S3_CREDS = {
     "endpoint": "http://minio.example:9000",
