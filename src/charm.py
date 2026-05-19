@@ -13,6 +13,7 @@ import bcrypt
 import ops
 from charms.data_platform_libs.v0.data_interfaces import DatabaseRequires
 from charms.data_platform_libs.v0.s3 import S3Requirer
+from charms.grafana_k8s.v0.grafana_dashboard import GrafanaDashboardProvider
 from charms.loki_k8s.v1.loki_push_api import LogForwarder
 from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 from charms.traefik_k8s.v0.traefik_route import TraefikRouteRequirer
@@ -97,6 +98,7 @@ class N8nK8sCharm(CharmBase):
             jobs=[{"static_configs": [{"targets": [f"*:{N8N_PORT}"]}]}],
             refresh_event=self.on.config_changed,
         )
+        self._grafana_dashboards = GrafanaDashboardProvider(self)
         self._log_forwarder = LogForwarder(self, relation_name="logging")
         self.framework.observe(self.on[METRICS_RELATION_NAME].relation_created, self._on_metrics_changed)
         self.framework.observe(self.on[METRICS_RELATION_NAME].relation_broken, self._on_metrics_changed)
