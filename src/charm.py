@@ -12,6 +12,7 @@ import urllib.request
 import bcrypt
 import ops
 from charms.data_platform_libs.v0.data_interfaces import DatabaseRequires
+from charms.data_platform_libs.v0.s3 import S3Requirer
 from charms.loki_k8s.v1.loki_push_api import LogForwarder
 from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 from charms.traefik_k8s.v0.traefik_route import TraefikRouteRequirer
@@ -19,7 +20,13 @@ from ops import main, pebble
 from ops.charm import CharmBase
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
 
-from pebble import build_layer, build_tier1_env, build_url_env
+from pebble import (
+    build_layer,
+    build_s3_env,
+    build_smtp_env,
+    build_tier1_env,
+    build_url_env,
+)
 from state import PEER_RELATION_NAME, CharmState
 
 logger = logging.getLogger(__name__)
@@ -29,6 +36,7 @@ SERVICE_NAME = "n8n"
 DB_RELATION_NAME = "postgresql"
 METRICS_RELATION_NAME = "metrics-endpoint"
 INGRESS_RELATION_NAME = "traefik-route"
+S3_RELATION_NAME = "s3"
 DATABASE_NAME = "n8n"
 N8N_PORT = 5678
 
@@ -92,6 +100,9 @@ class N8nK8sCharm(CharmBase):
         self._log_forwarder = LogForwarder(self, relation_name="logging")
         self.framework.observe(self.on[METRICS_RELATION_NAME].relation_created, self._on_metrics_changed)
         self.framework.observe(self.on[METRICS_RELATION_NAME].relation_broken, self._on_metrics_changed)
+        self._s3 = S3Requirer(self, S3_RELATION_NAME, bucket_name=self.app.name)
+        self.framework.observe(self._s3.on.credentials_changed, self._on_s3_credentials_changed)
+        self.framework.observe(self._s3.on.credentials_gone, self._on_s3_credentials_gone)
 
     def _on_install(self, _event) -> None:
         self._reconcile()
@@ -121,6 +132,14 @@ class N8nK8sCharm(CharmBase):
         self._reconcile()
 
     def _on_metrics_changed(self, _event) -> None:
+        self._reconcile()
+
+    def _on_s3_credentials_changed(self, _event) -> None:
+        logger.info("S3 credentials available")
+        self._reconcile()
+
+    def _on_s3_credentials_gone(self, _event) -> None:
+        logger.info("S3 relation departed")
         self._reconcile()
 
     def _on_ingress_changed(self, _event) -> None:
@@ -200,6 +219,26 @@ class N8nK8sCharm(CharmBase):
 
         event.set_results({"created": True, "email": email})
 
+    def _resolve_secret_uri(self, config_name: str) -> tuple[str | None, str | None]:
+        """Look up a Juju secret referenced by a config option.
+
+        Returns (value, None) when the secret is present and exposes a 'value'
+        field; (None, blocked_msg) when the URI is set but not granted or
+        malformed; (None, None) when the config is empty.
+        """
+        uri = self.config.get(config_name)
+        if not uri:
+            return (None, None)
+        try:
+            secret = self.model.get_secret(id=uri)
+            content = secret.get_content(refresh=True)
+        except (ops.SecretNotFoundError, ops.ModelError):
+            return (None, f"{config_name} secret not granted to app")
+        value = content.get("value")
+        if not value:
+            return (None, f"{config_name} secret missing 'value' field")
+        return (value, None)
+
     def _effective_encryption_key(self) -> tuple[str | None, str | None]:
         """Return (key, blocked_msg).
 
@@ -207,17 +246,11 @@ class N8nK8sCharm(CharmBase):
         - (None, msg): terminal Blocked condition.
         - (None, None): not-yet-ready; caller should emit WaitingStatus.
         """
-        override = self.config.get(ENCRYPTION_KEY_CONFIG)
-        if override:
-            try:
-                secret = self.model.get_secret(id=override)
-                content = secret.get_content(refresh=True)
-            except (ops.SecretNotFoundError, ops.ModelError):
-                return (None, "encryption-key secret not granted to app")
-            value = content.get("value")
-            if not value:
-                return (None, "encryption-key secret missing 'value' field")
-            return (value, None)
+        override, blocked_msg = self._resolve_secret_uri(ENCRYPTION_KEY_CONFIG)
+        if blocked_msg is not None:
+            return (None, blocked_msg)
+        if override is not None:
+            return (override, None)
 
         state = CharmState(self)
         if state.peer_relation is None:
@@ -258,6 +291,16 @@ class N8nK8sCharm(CharmBase):
             self.unit.status = BlockedStatus(tier1_err)
             return
 
+        smtp_pw, smtp_pw_err = self._resolve_secret_uri("smtp-password")
+        if smtp_pw_err is not None:
+            self.unit.status = BlockedStatus(smtp_pw_err)
+            return
+
+        smtp_env, smtp_err = build_smtp_env(self.config, smtp_pw)
+        if smtp_err is not None:
+            self.unit.status = BlockedStatus(smtp_err)
+            return
+
         db_env = self._db_env()
         if db_env is None:
             if self.model.get_relation(DB_RELATION_NAME) is None:
@@ -281,8 +324,15 @@ class N8nK8sCharm(CharmBase):
             return
 
         self.unit.status = MaintenanceStatus("starting n8n")
+        s3_creds = self._s3_creds()
+        s3_env = build_s3_env(s3_creds) if s3_creds else None
         binary_data_attached = not binary_data_detaching and self._binary_data_attached()
-        binary_data_mode = "filesystem" if binary_data_attached else None
+        if s3_creds:
+            binary_data_mode = "s3"
+        elif binary_data_attached:
+            binary_data_mode = "filesystem"
+        else:
+            binary_data_mode = None
         if binary_data_attached:
             self._chown_binary_data_mount(container)
         metrics_env = {"N8N_METRICS": "true"} if self.model.get_relation(METRICS_RELATION_NAME) is not None else None
@@ -293,7 +343,9 @@ class N8nK8sCharm(CharmBase):
                 key,
                 url_env=build_url_env(url),
                 tier1_env=tier1_env,
+                smtp_env=smtp_env,
                 metrics_env=metrics_env,
+                s3_env=s3_env,
                 binary_data_mode=binary_data_mode,
             ),
             combine=True,
@@ -308,7 +360,11 @@ class N8nK8sCharm(CharmBase):
             self.unit.status = MaintenanceStatus(STATUS_WAITING_N8N)
             return
 
-        if binary_data_attached:
+        if s3_creds and binary_data_attached:
+            self.unit.status = ActiveStatus("binary data: s3 (storage mount idle)")
+        elif s3_creds:
+            self.unit.status = ActiveStatus()
+        elif binary_data_attached:
             self.unit.status = ActiveStatus()
         else:
             self.unit.status = ActiveStatus(STATUS_BINARY_DATA_FALLBACK)
@@ -384,6 +440,16 @@ class N8nK8sCharm(CharmBase):
                 "chown of %s failed; n8n may be unable to write attachments",
                 BINARY_DATA_MOUNT_PATH,
             )
+
+    def _s3_creds(self) -> dict | None:
+        """Return the 5-key S3 creds dict, or None if any key is missing/empty.
+
+        Keys: bucket, endpoint, region, access-key, secret-key. Never logs values.
+        """
+        info = self._s3.get_s3_connection_info()
+        keys = ("bucket", "endpoint", "region", "access-key", "secret-key")
+        creds = {k: info.get(k, "") for k in keys}
+        return creds if all(creds.values()) else None
 
     def _db_env(self) -> dict | None:
         """Return the Postgres env-var dict for n8n, or None if not ready."""

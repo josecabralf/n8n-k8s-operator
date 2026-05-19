@@ -87,12 +87,74 @@ def build_tier1_env(
     return (env, None)
 
 
+S3_REQUIRED_KEYS = ("endpoint", "bucket", "region", "access-key", "secret-key")
+
+
+def build_s3_env(creds: Mapping[str, str]) -> dict[str, str]:
+    """Translate S3Requirer credentials into n8n env vars.
+
+    Returns ``{}`` when any of the five required keys is missing or
+    empty — the caller treats that as "S3 not yet ready" and skips
+    binary-data mode ``s3``. No validation beyond presence; the
+    s3-integrator provides what it has.
+    """
+    for key in S3_REQUIRED_KEYS:
+        if not creds.get(key):
+            return {}
+    return {
+        "N8N_AVAILABLE_BINARY_DATA_MODES": "filesystem,s3",
+        "N8N_EXTERNAL_STORAGE_S3_HOST": creds["endpoint"],
+        "N8N_EXTERNAL_STORAGE_S3_BUCKET_NAME": creds["bucket"],
+        "N8N_EXTERNAL_STORAGE_S3_BUCKET_REGION": creds["region"],
+        "N8N_EXTERNAL_STORAGE_S3_ACCESS_KEY": creds["access-key"],
+        "N8N_EXTERNAL_STORAGE_S3_ACCESS_SECRET": creds["secret-key"],
+    }
+
+
+def build_smtp_env(
+    config: Mapping[str, Any],
+    smtp_password: str | None,
+) -> tuple[dict[str, str] | None, str | None]:
+    """Translate Tier 2 SMTP configs into n8n env vars.
+
+    Returns ({}, None) when SMTP is unconfigured (all of host/user/password
+    empty); (env, None) when fully configured; (None, msg) when the
+    config is invalid (partial trio, port out of range).
+    """
+    host = str(config.get("smtp-host", "")).strip()
+    user = str(config.get("smtp-user", "")).strip()
+    pw_set = bool(smtp_password)
+
+    if not (host or user or pw_set):
+        return ({}, None)
+    if not (host and user and pw_set):
+        return (None, "smtp-host, smtp-user, and smtp-password must all be set together")
+
+    port = int(config.get("smtp-port", 587))
+    if not 1 <= port <= 65535:
+        return (None, f"invalid smtp-port '{port}'; must be 1–65535")
+
+    env = {
+        "N8N_SMTP_HOST": host,
+        "N8N_SMTP_PORT": str(port),
+        "N8N_SMTP_USER": user,
+        "N8N_SMTP_PASSWORD": smtp_password,
+        "N8N_SMTP_SSL": "true" if bool(config.get("smtp-ssl-tls", False)) else "false",
+    }
+    sender = str(config.get("smtp-sender", "")).strip()
+    if sender:
+        env["N8N_SMTP_SENDER"] = sender
+    return (env, None)
+
+
 def build_layer(
     db_env: Mapping[str, str],
     encryption_key: str = "",
     url_env: Mapping[str, str] | None = None,
     tier1_env: Mapping[str, str] | None = None,
+    smtp_env: Mapping[str, str] | None = None,
     metrics_env: Mapping[str, str] | None = None,
+    s3_env: Mapping[str, str] | None = None,
     binary_data_mode: str | None = None,
 ) -> LayerDict:
     """Return a Pebble layer dict that runs n8n with the given DB env vars.
@@ -115,10 +177,19 @@ def build_layer(
         tier1_env: Optional mapping of Tier 1 n8n env vars derived from
             charm config (logging, timezone, executions retention,
             user-management toggle).
+        smtp_env: Optional mapping of Tier 2 SMTP env vars (``N8N_SMTP_HOST``,
+            ``N8N_SMTP_PORT``, ``N8N_SMTP_USER``, ``N8N_SMTP_PASSWORD``,
+            ``N8N_SMTP_SSL`` and optionally ``N8N_SMTP_SENDER``). Merged
+            after ``tier1_env`` and before ``url_env`` so url-derived vars
+            still win on collision.
         metrics_env: Optional mapping of metrics env vars, typically
             ``{"N8N_METRICS": "true"}`` when the ``metrics-endpoint``
             relation is present. Omit to leave n8n metrics disabled
             (n8n default — ``/metrics`` returns 404).
+        s3_env: Optional mapping of n8n S3 env vars produced by
+            ``build_s3_env`` from the ``s3`` relation. When set the
+            caller should also pass ``binary_data_mode="s3"``; an empty
+            mapping is treated as "S3 not yet ready" and omitted.
         binary_data_mode: If set, written as
             ``N8N_DEFAULT_BINARY_DATA_MODE``. Use ``"filesystem"`` when
             the binary-data storage is attached, ``"s3"`` when the s3
@@ -132,10 +203,14 @@ def build_layer(
     environment: dict[str, str] = dict(db_env)
     if tier1_env:
         environment.update(tier1_env)
+    if smtp_env:
+        environment.update(smtp_env)
     if url_env:
         environment.update(url_env)
     if metrics_env:
         environment.update(metrics_env)
+    if s3_env:
+        environment.update(s3_env)
     if encryption_key:
         environment["N8N_ENCRYPTION_KEY"] = encryption_key
     if binary_data_mode:
