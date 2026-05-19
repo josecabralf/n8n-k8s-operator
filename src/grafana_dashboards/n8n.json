@@ -1,0 +1,254 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "id": null,
+  "uid": "n8n-overview",
+  "title": "n8n Overview",
+  "tags": ["n8n", "juju"],
+  "schemaVersion": 35,
+  "style": "dark",
+  "timezone": "",
+  "version": 1,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "prometheusds",
+        "type": "datasource",
+        "query": "prometheus",
+        "label": "Prometheus datasource",
+        "hide": 0,
+        "refresh": 1,
+        "regex": "",
+        "multi": false,
+        "includeAll": false,
+        "current": {}
+      },
+      {
+        "name": "juju_model",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheusds}"
+        },
+        "query": {
+          "query": "label_values(up, juju_model)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "definition": "label_values(up, juju_model)",
+        "label": "Juju model",
+        "hide": 0,
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {}
+      },
+      {
+        "name": "juju_model_uuid",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheusds}"
+        },
+        "query": {
+          "query": "label_values(up{juju_model=~\"$juju_model\"}, juju_model_uuid)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "definition": "label_values(up{juju_model=~\"$juju_model\"}, juju_model_uuid)",
+        "label": "Juju model UUID",
+        "hide": 0,
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {}
+      },
+      {
+        "name": "juju_application",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheusds}"
+        },
+        "query": {
+          "query": "label_values(up{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\"}, juju_application)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "definition": "label_values(up{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\"}, juju_application)",
+        "label": "Juju application",
+        "hide": 0,
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {}
+      },
+      {
+        "name": "juju_unit",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheusds}"
+        },
+        "query": {
+          "query": "label_values(up{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\"}, juju_unit)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "definition": "label_values(up{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\"}, juju_unit)",
+        "label": "Juju unit",
+        "hide": 0,
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Workflow execution rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheusds}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheusds}"
+          },
+          "expr": "rate(n8n_workflow_success_total{juju_model=~\"$juju_model\", juju_application=~\"$juju_application\"}[5m])",
+          "legendFormat": "success"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheusds}"
+          },
+          "expr": "rate(n8n_workflow_failures_total{juju_model=~\"$juju_model\", juju_application=~\"$juju_application\"}[5m])",
+          "legendFormat": "failures"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "heatmap",
+      "title": "Workflow execution duration",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheusds}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "options": {
+        "calculate": false,
+        "yAxis": {
+          "axisPlacement": "left",
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheusds}"
+          },
+          "expr": "rate(n8n_workflow_execution_duration_seconds_bucket{juju_model=~\"$juju_model\", juju_application=~\"$juju_application\"}[5m])",
+          "format": "heatmap",
+          "legendFormat": "{{le}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Active executions",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheusds}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 6,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheusds}"
+          },
+          "expr": "n8n_active_workflow_count{juju_model=~\"$juju_model\", juju_application=~\"$juju_application\"}",
+          "legendFormat": ""
+        }
+      ]
+    }
+  ]
+}
