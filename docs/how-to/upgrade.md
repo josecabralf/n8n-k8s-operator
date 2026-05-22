@@ -33,22 +33,19 @@ This charm does not implement database backup. PostgreSQL is managed by the
 before refreshing. See the postgresql-k8s documentation for the backup action
 and any prerequisites.
 
-The charm reads connection information (`endpoints`, `username`, `password`,
-`database`) from the `postgresql` relation databag and sets the
-`DB_POSTGRESDB_*` environment variables accordingly (`src/charm.py:667-686`).
-The database itself is external to the charm and unaffected by `juju refresh`,
-but a backup gives you a restore point if the new charm revision runs a
-migration that cannot be rolled back.
+The database is external to the charm and unaffected by `juju refresh`, but a
+backup gives you a restore point if the new charm revision runs a migration that
+cannot be rolled back.
 
 ### Back up binary data
 
 If you are using filesystem storage, snapshot the `binary-data` PVC before
 refreshing. The PVC is mounted at `/home/node/.n8n/binaryData`
-(`charmcraft.yaml:39-47`). Use a Kubernetes-level volume snapshot.
+(`charmcraft.yaml`). Use a Kubernetes-level volume snapshot.
 
 If you are using S3, the bucket is the source of truth. Verify all objects are
 present before proceeding. The bucket name defaults to the application name and
-is stored in the S3Requirer relation data.
+is set on the `s3` relation by `s3-integrator`.
 
 ## Refresh the charm
 
@@ -66,21 +63,20 @@ juju refresh n8n --revision=<n>
 
 | State | Persistence layer |
 |---|---|
-| Encryption key | Juju app secret; secret ID held in the `n8n-peers` peer databag under `encryption-key-secret-id` (`src/state.py:9,32`) |
+| Encryption key | Juju app secret; persists across pod restarts and charm upgrades |
 | Workflows and credentials | PostgreSQL database, managed by `postgresql-k8s` |
 | Binary data (filesystem) | PVC; persists across pod restarts and charm upgrades |
-| Binary data (S3) | S3 bucket; read from S3Requirer relation on each reconcile |
+| Binary data (S3) | S3 bucket; re-read from the s3-integrator relation on each reconcile |
 | Configuration | Juju controller (charm config keys in `charmcraft.yaml`) |
 
 ## Readiness gating during refresh
 
-The Pebble layer defines a `ready` check: HTTP GET to `/healthz/readiness`,
-period 10 s, threshold 3 (`src/pebble.py:510-516`). Three consecutive passing
-responses are required before Pebble marks the check as `UP`. During replan
-the unit transitions through `"starting n8n"` (`src/charm.py:531`) and then to
-`"waiting for n8n to start"` (`src/charm.py:567`) while the reconcile loop
-waits for the check to pass. Traffic remains blocked until the check reaches
-`UP`; the unit then moves to `ActiveStatus`.
+Pebble performs a `ready` check: HTTP GET to `/healthz/readiness`, period 10 s,
+threshold 3. Three consecutive passing responses are required before Pebble
+marks the check as `UP`. During replan the unit transitions through
+`"starting n8n"` and then to `"waiting for n8n to start"` while the reconcile
+loop waits for the check to pass. Traffic remains blocked until the check
+reaches `UP`; the unit then moves to `ActiveStatus`.
 
 ## Rolling back
 

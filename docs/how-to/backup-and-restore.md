@@ -6,38 +6,33 @@ an unbootable deployment or inaccessible workflow attachments.
 
 ## Capture the encryption key
 
-Run the `get-encryption-key` action (declared in `charmcraft.yaml`, handler at
-`src/charm.py:248-253`):
+Run the `get-encryption-key` action (declared in `charmcraft.yaml`):
 
 ```bash
 juju run n8n/0 get-encryption-key
 ```
 
 The action returns the current value of `N8N_ENCRYPTION_KEY` in the
-`encryption-key` result field. The value is a 48-character hex string
-generated as `secrets.token_hex(24)` (`src/charm.py:341`). Store it offsite,
-in an offline vault or equivalent. This is the only retrieval path after
-initial deployment. If the key is lost and the unit is redeployed, every
+`encryption-key` result field. The value is a 48-character hex string. Store it
+offsite, in an offline vault or equivalent. This is the only retrieval path
+after initial deployment. If the key is lost and the unit is redeployed, every
 credential stored in the database is unreadable.
 
 ## Capture the database
 
-This charm does not implement database backup. It reads `endpoints`, `username`,
-`password`, and `database` from the `postgresql` relation databag and passes
-them to the n8n process as `DB_POSTGRESDB_*` environment variables
-(`src/charm.py:667-686`). The PostgreSQL instance is managed by the
-`postgresql-k8s` charm.
+This charm does not implement database backup. The PostgreSQL instance is
+managed by the `postgresql-k8s` charm.
 
 Use the postgresql-k8s backup mechanism to capture the n8n database. See the
 postgresql-k8s documentation for the backup action and any prerequisites. The
-database name defaults to `n8n` (`src/charm.py:48`, constant `DATABASE_NAME`).
+database name defaults to `n8n`.
 
 ## Capture binary data
 
 ### Filesystem mode
 
 The `binary-data` storage is a filesystem volume mounted at
-`/home/node/.n8n/binaryData` (`charmcraft.yaml:39-47`):
+`/home/node/.n8n/binaryData` (`charmcraft.yaml`):
 
 ```yaml
 storage:
@@ -48,15 +43,14 @@ storage:
 ```
 
 Take a Kubernetes-level PVC snapshot before any operation that could replace
-the pod. The charm's `_chown_binary_data_mount()` function runs on each
-reconcile and is idempotent, so ownership is re-applied automatically after
-restore.
+the pod. Mount ownership is re-applied automatically on each reconcile, so no
+manual fixup is needed after restore.
 
 ### S3 mode
 
 The S3 bucket is the source of truth. The bucket name defaults to the
 application name (configured via s3-integrator). Verify that all objects are
-present in the bucket. The charm reads S3 credentials from the S3Requirer
+present in the bucket. The charm reads S3 credentials from the s3-integrator
 relation on each reconcile and sets `N8N_EXTERNAL_STORAGE_S3_*` environment
 variables accordingly.
 
@@ -86,8 +80,7 @@ juju deploy n8n --channel=edge --config encryption-key=secret:<id>
 ```
 
 The `encryption-key` config option accepts a Juju secret URI
-(`charmcraft.yaml:76-86`). The charm reads the `value` field from the secret
-content (`src/charm.py:328-331`).
+(`charmcraft.yaml`).
 
 **3. Restore the PostgreSQL database.**
 

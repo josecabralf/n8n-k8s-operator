@@ -13,15 +13,15 @@ Vault integration lets `vault:` entries in the `environment` config resolve to l
 juju integrate n8n vault-k8s
 ```
 
-The relation uses the `vault-kv` interface, declared as the `vault-k8s` endpoint in `charmcraft.yaml:63-66`. The relation is optional: if no `vault:` entries exist in the `environment` config, the unit operates normally without it.
+The relation uses the `vault-kv` interface, declared as the `vault-k8s` endpoint in `charmcraft.yaml`. The relation is optional: if no `vault:` entries exist in the `environment` config, the unit operates normally without it.
 
 ## Mount layout
 
-The charm constructs its KV mount path as `charm-<app-name>-<mount-suffix>`. The suffix is fixed to `"n8n"` (`src/charm.py:58`), so for an application named `n8n` the mount path is `charm-n8n-n8n`. For an application deployed under a different name, substitute that name in place of `n8n` in the middle segment. The `VaultKvRequires` object is initialised with this suffix at `src/charm.py:121`.
+The charm constructs its KV mount path as `charm-<app-name>-<mount-suffix>`. The suffix is fixed to `"n8n"`, so for an application named `n8n` the mount path is `charm-n8n-n8n`. For an application deployed under a different name, substitute that name in place of `n8n` in the middle segment.
 
 ## AppRole and CIDR binding
 
-When the relation is joined, the charm publishes the unit nonce, the model egress subnets, and the pod-interface subnet to vault-k8s (`src/charm.py:182-202`). Including the pod-interface subnet ensures that the AppRole CIDR allow-list covers the actual pod source address, not only the ClusterIP. Vault binds the issued AppRole credentials to that combined CIDR list. The charm fetches the role-id and role-secret-id from the relation databag, writes the CA certificate if provided, and constructs an authenticated `hvac.Client` before reading any secrets.
+When the relation is joined, the charm requests AppRole credentials bound to the unit's pod CIDR. It publishes the model egress subnets and the pod-interface subnet to vault-k8s; including the pod-interface subnet ensures that the AppRole CIDR allow-list covers the actual pod source address, not only the ClusterIP. Vault binds the issued AppRole credentials to that combined CIDR list. Once credentials are issued, the charm writes the CA certificate if provided and opens an authenticated session before reading any secrets.
 
 ## Reference a Vault secret from `environment`
 
@@ -44,13 +44,13 @@ For the full `environment` config syntax, see [Use the environment escape hatch]
 
 If secret resolution fails, the unit enters `BlockedStatus` with one of the following messages. The `<name>` placeholder is the value of the `name` field in the offending `vault:` entry.
 
-- `"environment vault entry '<name>': vault-k8s relation not joined"` — the `vault-k8s` relation is absent or the remote application databag is empty (`src/charm.py:430`).
-- `"environment vault entry '<name>': vault credentials not ready"` — the relation is joined but the AppRole credentials have not been issued yet, or the vault URL or mount point is not yet published (`src/charm.py:432-442`).
-- `"environment vault entry '<name>': vault login failed (<short-error>)"` — the charm holds credentials but the AppRole login call to Vault was rejected (`src/charm.py:440`).
-- `"environment vault entry '<name>': path '<path>' not found"` — the KV path does not exist under the mount (`src/charm.py:454`).
-- `"environment vault entry '<name>': key '<key>' not in path '<path>'"` — the path exists but does not contain the requested field (`src/charm.py:459`).
+- `"environment vault entry '<name>': vault-k8s relation not joined"` — the `vault-k8s` relation is absent or the remote application databag is empty.
+- `"environment vault entry '<name>': vault credentials not ready"` — the relation is joined but the AppRole credentials have not been issued yet, or the vault URL or mount point is not yet published.
+- `"environment vault entry '<name>': vault login failed (<short-error>)"` — the charm holds credentials but the AppRole login call to Vault was rejected.
+- `"environment vault entry '<name>': path '<path>' not found"` — the KV path does not exist under the mount.
+- `"environment vault entry '<name>': key '<key>' not in path '<path>'"` — the path exists but does not contain the requested field.
 
-All five messages are constructed by the `_err` helper at `src/charm.py:421-422` and set on the unit at `src/charm.py:571`. Correct the underlying condition and the unit will re-reconcile on the next hook.
+Correct the underlying condition and the unit will re-reconcile on the next hook.
 
 ## Detaching
 

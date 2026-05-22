@@ -14,30 +14,13 @@ on demand.
 
 ## Two sources for the key
 
-The key is resolved by `_effective_encryption_key()` in `src/charm.py:321-357`.
-The function returns a `(key, blocked_msg)` tuple and distinguishes two
-cases.
+The charm checks the `encryption-key` config first and falls back to auto-generation when that config is unset.
 
-**Override.** If the `encryption-key` config key (declared in `charmcraft.yaml`)
-is set to a Juju user-secret URI of the form `secret:<id>`, the charm reads the
-key from that secret instead of generating one. The referenced secret must
-contain a field named `value` and must be granted to the application before the
-config is applied. This path exists for migrations from an existing n8n install
-where the encryption key is already known; supplying the old key ensures the
-existing credential rows remain readable after the charm takes over.
+**Override.** If the `encryption-key` config key (declared in `charmcraft.yaml`) is set to a Juju user-secret URI of the form `secret:<id>`, the charm reads the key from that secret instead of generating one. The referenced secret must contain a field named `value` and must be granted to the application before the config is applied. This path exists for migrations from an existing n8n install where the encryption key is already known; supplying the old key ensures the existing credential rows remain readable after the charm takes over.
 
-**Auto-generate.** When no override is configured, the charm generates the key
-itself. Only the leader unit runs the generator: `secrets.token_hex(24)`,
-producing 48 hex characters. The value is stored immediately in a Juju
-app-owned secret with the label `n8n-encryption-key` (see `src/charm.py:341-347`).
-The Juju secret ID is then written to the peer-relation app databag under the
-key `encryption-key-secret-id` (defined in `src/state.py:8-9`). Non-leader
-units wait until the peer databag carries this ID before they can read the key.
+**Auto-generate.** When no override is configured, the charm generates the key itself. Only the leader unit runs the generator, producing a 48-character hex string. The value is stored in a Juju app-owned secret labelled `n8n-encryption-key`. The Juju secret ID is then written to the peer-relation app databag. Non-leader units wait until the peer databag carries this ID before they can read the key.
 
-On subsequent calls (any event after the first), the function reads
-`encryption-key-secret-id` from the peer databag and fetches the corresponding
-Juju secret. If the secret is missing or its `value` field is empty, the unit
-transitions to `BlockedStatus`.
+On every subsequent event the charm reads the secret ID from the peer databag and fetches the corresponding Juju secret. If the secret is missing or its `value` field is empty, the unit transitions to `BlockedStatus`.
 
 ## Persistence model
 
@@ -54,14 +37,10 @@ separately using the `get-encryption-key` action described below.
 
 ## Reading the key
 
-The `get-encryption-key` action (declared in `charmcraft.yaml`) calls
-`_effective_encryption_key()` and returns the result in the `encryption-key`
-field of the action output (`src/charm.py:248-253`). The action does not
-require the unit to be the leader because the Juju secret is app-owned and
-readable by any unit.
+The `get-encryption-key` action (declared in `charmcraft.yaml`) returns the current key in the `encryption-key` field of the action output. The action does not require the unit to be the leader because the Juju secret is app-owned and readable by any unit.
 
 Run this action after the first deployment and store the result offsite. The
-action description in `charmcraft.yaml:206-210` states: "Store this offsite for
+action description in `charmcraft.yaml` states: "Store this offsite for
 disaster recovery — losing this key bricks every credential stored in n8n's
 database."
 
@@ -70,7 +49,7 @@ For guidance on incorporating the key retrieval into a backup procedure, see
 
 ## Why no rotation in v1
 
-The `encryption-key` config description in `charmcraft.yaml:84-86` states:
+The `encryption-key` config description in `charmcraft.yaml` states:
 "Rotation is NOT supported in v1 — changing this after deploy bricks every
 credential stored by n8n."
 

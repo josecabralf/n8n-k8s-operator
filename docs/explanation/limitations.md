@@ -4,13 +4,7 @@ This page lists known constraints of the v1 charm: what it does not do today, an
 
 ## Single-unit only
 
-Encryption-key generation (`src/charm.py:339`), ingress publication
-(`src/charm.py:605`), and the `create-admin` action (`src/charm.py:256`) are all
-gated on `self.unit.is_leader()`. Non-leader units skip those paths entirely. The
-workload itself is a single n8n process started with `n8n start`; no queue mode or
-worker pool is declared anywhere in `src/`. Horizontal scaling in n8n requires queue
-mode backed by Redis, neither of which is implemented in v1. Scale the unit
-vertically if throughput is a concern.
+Only one unit runs the n8n process. Encryption-key generation, ingress publication, and the `create-admin` action are all leader-only operations; adding extra units does not increase throughput or availability. Horizontal scaling in n8n requires queue mode backed by Redis, neither of which is implemented in v1. Scale the unit vertically if throughput is a concern.
 
 ## No encryption-key rotation
 
@@ -21,28 +15,15 @@ the manual migration path.
 
 ## Binary-data in-DB fallback is suboptimal
 
-Without `binary-data` storage attached or an S3 relation active, n8n stores workflow
-attachments directly in PostgreSQL. The charm surfaces this condition as the active
-status message `"binary data in DB; attach 'binary-data' storage or relate
-s3-integrator for production use"` (`src/charm.py:67-69`). PostgreSQL in-DB storage
-works for low-volume use but does not suit production deployments with large or
-frequent file attachments. Attach the `binary-data` storage or integrate
-`s3-integrator` before going to production.
+Without `binary-data` storage attached or an S3 relation active, n8n stores workflow attachments directly in PostgreSQL. The charm surfaces this condition as the active status message `"binary data in DB; attach 'binary-data' storage or relate s3-integrator for production use"`. PostgreSQL in-DB storage works for low-volume use but does not suit production deployments with large or frequent file attachments. Attach the `binary-data` storage or integrate `s3-integrator` before going to production.
 
 ## No internal task runner
 
-v1 runs a single n8n process that handles both the web UI and workflow execution.
-There are no references to queue mode, a dedicated worker pool, or an internal task
-runner in `src/`. Workflows that generate sustained high execution load should be
-addressed by vertical scaling (larger Kubernetes resource limits) until a queue-mode
-slice is implemented.
+v1 runs a single n8n process that handles both the web UI and workflow execution. There is no queue mode, dedicated worker pool, or internal task runner. Workflows that generate sustained high execution load should be addressed by vertical scaling (larger Kubernetes resource limits) until a queue-mode slice is implemented.
 
 ## No rollback hooks
 
-The charm has no explicit rollback handler or action. The reconcile loop is
-idempotent, so re-running it after a failed upgrade will restore the previous
-configuration, but the charm does not define a downgrade code path. The supported
-method to revert to a previous charm revision is:
+The charm has no explicit rollback handler or action. The reconcile loop is idempotent, so re-running it after a failed upgrade will restore the previous configuration, but the charm does not define a downgrade code path. The supported method to revert to a previous charm revision is:
 
 ```bash
 juju refresh n8n --revision=<previous>
@@ -60,7 +41,7 @@ add a second provider for any of these relations will be rejected by Juju.
 
 ## `assumes:` block
 
-The charm declares two deployment requirements in `charmcraft.yaml:15-17`:
+The charm declares two deployment requirements in `charmcraft.yaml`:
 
 - `k8s-api` — the Juju controller must have access to the Kubernetes API. The charm
   cannot be deployed on a machine cloud.

@@ -1,6 +1,6 @@
 # Build a derived n8n image
 
-The charm pins an upstream image in `charmcraft.yaml:33`:
+The charm pins an upstream image in `charmcraft.yaml`:
 
 ```
 upstream-source: docker.n8n.io/n8nio/n8n@sha256:32d7475...
@@ -44,9 +44,9 @@ juju refresh n8n --resource n8n-image=registry.example/n8n-custom:v1
 
 ## What the charm expects from the image
 
-- **Command.** The Pebble layer sets `command: n8n start` (`src/pebble.py:498`). Do not override the image entrypoint or the service will fail to start.
-- **Health endpoints.** Pebble probes `http://localhost:5678/healthz` (alive check) and `http://localhost:5678/healthz/readiness` (ready check, threshold 3) (`src/pebble.py:504-517`). The image must expose these endpoints.
-- **Writable mount.** The charm mounts `binary-data` storage at `/home/node/.n8n/binaryData` (`charmcraft.yaml:22-27`). The runtime user must be able to write there.
+- **Command.** The charm starts the workload with `n8n start`. Do not override the image entrypoint or the service will fail to start.
+- **Health endpoints.** Pebble probes `http://localhost:5678/healthz` (alive check) and `http://localhost:5678/healthz/readiness` (ready check, threshold 3). The image must expose these endpoints.
+- **Writable mount.** The charm mounts `binary-data` storage at `/home/node/.n8n/binaryData` (`charmcraft.yaml`). The runtime user must be able to write there.
 - **Environment variables.** The charm injects the full set of `N8N_*` variables it manages. The image must not hard-code values that conflict with those variables. See [configurations reference](../reference/configurations.md) for the full list.
 
 ## Caveats

@@ -4,7 +4,7 @@ n8n sends notification emails (workflow errors, user invites, password resets) o
 
 ## Required configs
 
-All six keys are declared in `charmcraft.yaml` (lines 166–203).
+All six keys are declared in `charmcraft.yaml`.
 
 | Config key      | Type    | Default | Env var            | Notes                                         |
 |-----------------|---------|---------|--------------------|-----------------------------------------------|
@@ -29,7 +29,7 @@ juju add-secret n8n-smtp-password value=<the-password>
 juju grant-secret n8n-smtp-password n8n
 ```
 
-The secret must contain a single field named `value`. The charm reads `content.get("value")` (`src/charm.py:316`) and blocks if the field is absent.
+The secret must contain a single field named `value`. The unit blocks if the field is absent.
 
 ## Configure the charm
 
@@ -53,13 +53,13 @@ juju config n8n \
 
 ## Status while incomplete
 
-The three keys `smtp-host`, `smtp-user`, and `smtp-password` must be set together or not at all. If any one is set without the others, the unit blocks (`src/pebble.py:385–386`):
+The three keys `smtp-host`, `smtp-user`, and `smtp-password` must be set together or not at all. If any one is set without the others, the unit blocks:
 
 ```
 "smtp-host, smtp-user, and smtp-password must all be set together"
 ```
 
-If `smtp-port` is set outside the valid range, the unit blocks (`src/pebble.py:390`):
+If `smtp-port` is set outside the valid range, the unit blocks:
 
 ```
 "invalid smtp-port '<port>'; must be 1–65535"
@@ -69,13 +69,13 @@ Correct the offending config value and the unit will re-reconcile automatically.
 
 ## Secret ungranted
 
-If the secret URI in `smtp-password` has not been granted to the app, or the URI does not exist, the unit blocks (`src/charm.py:315`):
+If the secret URI in `smtp-password` has not been granted to the app, or the URI does not exist, the unit blocks:
 
 ```
 "<config-name> secret not granted to app"
 ```
 
-If the secret exists and is granted but does not contain a `value` field, the unit blocks (`src/charm.py:318`):
+If the secret exists and is granted but does not contain a `value` field, the unit blocks:
 
 ```
 "<config-name> secret missing 'value' field"

@@ -40,19 +40,19 @@ juju integrate n8n admin/cos.grafana-k8s
 
 Replace `n8n-tutorial` with the model name you used in `juju add-model` if you deviated from the tutorial.
 
-`MetricsEndpointProvider` (imported in `src/charm.py:21`) publishes scrape targets for the `metrics-endpoint` relation. `LogForwarder` (imported in `src/charm.py:20`, instantiated at `src/charm.py:115`) handles log forwarding over the `logging` relation. `GrafanaDashboardProvider` (imported in `src/charm.py:19`, instantiated at `src/charm.py:114`) publishes the dashboard JSON over the `grafana-dashboard` relation.
+Once each integration is active, n8n's Prometheus exporter is scraped on port 5678, workload logs are forwarded to Loki, and the pre-bundled dashboard JSON is loaded into Grafana.
 
 ## What the charm publishes
 
-Metrics scrape targets are configured as `*:5678` (port `N8N_PORT`, set at `src/charm.py:111`), so Prometheus scrapes all units on port 5678 at the `/metrics` path. Logs are forwarded by `LogForwarder` (`src/charm.py:115`); the library manages relation data and log collection without additional charm-side event handlers. The dashboard JSON is bundled at `src/grafana_dashboards/n8n.json` and published to Grafana through the `grafana-dashboard` relation.
+Prometheus scrapes all units on port 5678 at the `/metrics` path. Logs are forwarded over the `logging` relation. The dashboard JSON is bundled with the charm and published to Grafana over the `grafana-dashboard` relation.
 
 ## Toggle n8n internal metrics
 
-No user action is required. When the `metrics-endpoint` relation is joined, the charm sets `N8N_METRICS=true` in the workload environment (`src/charm.py:543`), which enables n8n's built-in Prometheus exporter. The value is injected into the Pebble service layer via `src/pebble.py:476-477`. When the relation is removed, the variable is unset and the exporter is disabled.
+No user action is required. When the `metrics-endpoint` relation is joined, the charm sets `N8N_METRICS=true` in the workload environment, which enables n8n's built-in Prometheus exporter. When the relation is removed, the variable is unset and the exporter is disabled.
 
 ## Dashboard panels
 
-The `n8n Overview` dashboard (`src/grafana_dashboards/n8n.json`) contains three panels. The dashboard is intentionally minimal.
+The `n8n Overview` dashboard contains three panels. The dashboard is intentionally minimal.
 
 - Workflow execution rate
 - Workflow execution duration
