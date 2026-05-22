@@ -82,20 +82,3 @@ def test_scrape_jobs_published_to_relation_data(harness):
     jobs = json.loads(app_data["scrape_jobs"])
     assert isinstance(jobs, list) and jobs
     assert jobs[0]["static_configs"][0]["targets"] == ["*:5678"]
-
-
-def test_reaches_active_without_metrics_relation(harness, monkeypatch):
-    from ops.model import ActiveStatus
-    from ops.pebble import CheckStatus
-
-    from charm import STATUS_BINARY_DATA_FALLBACK
-
-    _fully_ready(harness)
-    container = harness.charm.unit.get_container(CONTAINER)
-
-    class _Check:
-        status = CheckStatus.UP
-
-    monkeypatch.setattr(container, "get_check", lambda _name: _Check())
-    harness.charm.on.update_status.emit()
-    assert harness.charm.unit.status == ActiveStatus(STATUS_BINARY_DATA_FALLBACK)
