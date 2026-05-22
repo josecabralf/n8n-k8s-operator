@@ -1,4 +1,4 @@
-name: n8n-k8s
+name: n8n
 type: charm
 title: n8n
 summary: Juju Kubernetes charm for n8n workflow automation.
