@@ -3,10 +3,15 @@ type: charm
 title: n8n
 summary: Juju Kubernetes charm for n8n workflow automation.
 description: |
-  n8n is a source-available workflow automation platform. This charm
-  operationalises n8n on Juju Kubernetes clouds with opinionated
-  defaults and standard Canonical relations (PostgreSQL, ingress, COS
-  Lite, S3 — additional relations land in later slices).
+  n8n is a source-available workflow automation platform. It connects
+  APIs, databases, and internal services through a visual editor, and
+  drops down to custom JavaScript or Python when a step needs code.
+
+  Small and medium teams self-host n8n to keep automation and the data
+  it touches on their own infrastructure. The upstream n8n Sustainable
+  Use License permits internal self-hosting; reselling n8n as a
+  multi-tenant SaaS is restricted. Read the upstream licence before
+  commercial use.
 
 links:
   source: https://github.com/josecabralf/n8n-k8s-operator

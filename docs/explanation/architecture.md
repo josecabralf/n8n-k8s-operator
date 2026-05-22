@@ -1,0 +1,27 @@
+# Architecture
+
+The charm runs a single `n8n` container managed by Pebble and exposes seven relation surfaces: `postgresql` (database), `s3` (binary-data object storage), `grafana-dashboard` (Grafana integration), `logging` (Loki log forwarding), `metrics-endpoint` (Prometheus scrape), `traefik-route` (ingress), and `vault-k8s` (secrets backend). Each relation surface connects directly to the corresponding charm library with no intermediate wrapper layer.
+
+## Single container, single service
+
+The `n8n` container is declared in `charmcraft.yaml` with one storage mount (`binary-data` at `/home/node/.n8n/binaryData`). Inside that container, a single Pebble service named `n8n` runs with `command: n8n start`, `override: replace`, and `startup: enabled`. There is no queue mode, worker pool, or separate runner process in v1; every workflow execution runs in the same process that the `n8n start` command launches.
+
+## State and peer relation
+
+The charm keeps a peer relation named `n8n-peers` to propagate state across units. The peer-relation app databag is leader-writable and carries the Juju secret ID for the encryption key. Non-leader units read this ID from the databag; only the leader writes it.
+
+## Reconcile pattern
+
+On every relevant event the charm walks a linear sequence of prerequisite checks: it verifies the encryption key is resolved, validates tier-1 config and SMTP config, resolves user-supplied environment entries, checks that the PostgreSQL relation is present and credentials are available, confirms the ingress relation is present, and finally tests that the Pebble container is reachable. Each failed check transitions the unit to `BlockedStatus`, `WaitingStatus`, or `MaintenanceStatus` and stops processing. When all checks pass, the charm applies the Pebble layer and sets `ActiveStatus`.
+
+## Pebble checks
+
+Two HTTP checks run against `localhost:5678`. The `live` check (level `alive`) polls `/healthz` every 30 seconds with the default failure threshold. The `ready` check (level `ready`) polls `/healthz/readiness` every 10 seconds with `threshold: 3`, meaning Pebble requires three consecutive failures before marking the service not-ready. The threshold of 3 prevents the unit from flapping to a non-ready state during the startup window while n8n initialises its database schema.
+
+## Why single-unit
+
+Encryption-key generation, ingress publication, and the `create-admin` action are all leader-only operations. The peer relation carries the encryption-key secret ID so that a replacement leader can recover it, but the n8n process itself runs only on the leader. Horizontal scaling would require n8n's built-in queue mode, a Redis relation, and coordinated session affinity at the ingress layer. Those are not in scope for v1.
+
+## Relation surfaces
+
+The charm exposes seven relation endpoints. `postgresql` supplies the database credentials n8n requires to persist workflow state. `s3` connects to an S3-compatible store for binary workflow attachments. `grafana-dashboard`, `logging`, and `metrics-endpoint` wire the unit into a COS Lite observability stack (Grafana, Loki, and Prometheus respectively). `traefik-route` registers the unit with Traefik for HTTP ingress. `vault-k8s` provides a Vault KV backend as an alternative secrets store.
