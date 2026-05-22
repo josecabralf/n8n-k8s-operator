@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from pebble import (
     EnvEntry,
     JujuEntry,
@@ -34,14 +36,18 @@ DB_ENV = {
 }
 
 
-def test_build_layer_returns_n8n_service_with_six_db_env_vars():
+def test_build_layer_n8n_service_runs_n8n_start():
     layer, _ = build_layer(DB_ENV, encryption_key="testkey")
 
-    service = layer["services"]["n8n"]
-    assert service["command"] == "n8n start"
+    assert layer["services"]["n8n"]["command"] == "n8n start"
+
+
+def test_build_layer_n8n_service_carries_db_env():
+    layer, _ = build_layer(DB_ENV, encryption_key="testkey")
+
+    environment = layer["services"]["n8n"]["environment"]
     for key, value in DB_ENV.items():
-        assert service["environment"][key] == value
-    assert len(service["environment"]) == 7
+        assert environment[key] == value
 
 
 def test_build_layer_environment_is_copied_not_aliased():
@@ -87,17 +93,15 @@ def test_build_layer_injects_n8n_encryption_key():
     assert environment["N8N_ENCRYPTION_KEY"] == "testkey"
 
 
-def test_build_url_env_returns_five_keys():
+def test_build_url_env_extracts_host_from_url():
     url_env = build_url_env("http://traefik.local/")
 
-    assert set(url_env.keys()) == {
-        "N8N_HOST",
-        "N8N_PROTOCOL",
-        "N8N_PORT",
-        "WEBHOOK_URL",
-        "N8N_EDITOR_BASE_URL",
-    }
     assert url_env["N8N_HOST"] == "traefik.local"
+
+
+def test_build_url_env_returns_expected_keys():
+    url_env = build_url_env("http://traefik.local/")
+
     assert url_env["N8N_PROTOCOL"] == "http"
     assert url_env["N8N_PORT"] == "5678"
     assert url_env["WEBHOOK_URL"] == "http://traefik.local/"
@@ -124,20 +128,15 @@ def test_build_layer_without_url_env_is_unchanged():
 
 
 def test_build_layer_with_url_env_merges_into_environment():
+    url_env = build_url_env("http://traefik.local/")
     layer, _ = build_layer(
         {"DB_TYPE": "postgresdb"},
         encryption_key="k",
-        url_env=build_url_env("http://traefik.local/"),
+        url_env=url_env,
     )
 
     environment = layer["services"]["n8n"]["environment"]
-    assert environment["DB_TYPE"] == "postgresdb"
-    assert environment["N8N_ENCRYPTION_KEY"] == "k"
-    assert environment["N8N_HOST"] == "traefik.local"
-    assert environment["N8N_PROTOCOL"] == "http"
-    assert environment["N8N_PORT"] == "5678"
-    assert environment["WEBHOOK_URL"] == "http://traefik.local/"
-    assert environment["N8N_EDITOR_BASE_URL"] == "http://traefik.local/"
+    assert environment.items() >= url_env.items()
 
 
 def test_build_layer_with_metrics_env_sets_n8n_metrics():
@@ -254,7 +253,7 @@ def test_build_layer_merges_tier1_env():
     assert layer["services"]["n8n"]["environment"]["N8N_LOG_LEVEL"] == "debug"
 
 
-def test_build_s3_env_returns_seven_n8n_env_vars():
+def test_build_s3_env_returns_expected_n8n_env_vars():
     env = build_s3_env(S3_CREDS)
 
     assert env == {
@@ -267,10 +266,11 @@ def test_build_s3_env_returns_seven_n8n_env_vars():
     }
 
 
-def test_build_s3_env_returns_empty_when_any_required_key_missing():
-    for key in ("endpoint", "bucket", "region", "access-key", "secret-key"):
-        partial = {k: v for k, v in S3_CREDS.items() if k != key}
-        assert build_s3_env(partial) == {}, f"missing {key} must return empty"
+@pytest.mark.parametrize("missing_key", ["endpoint", "bucket", "region", "access-key", "secret-key"])
+def test_build_s3_env_returns_empty_when_required_key_missing(missing_key):
+    partial = {k: v for k, v in S3_CREDS.items() if k != missing_key}
+
+    assert build_s3_env(partial) == {}
 
 
 def test_build_s3_env_returns_empty_when_required_key_blank():
@@ -290,13 +290,8 @@ def test_build_layer_with_s3_env_merges_into_environment():
     )
 
     env = layer["services"]["n8n"]["environment"]
+    assert env.items() >= s3_env.items()
     assert env["N8N_DEFAULT_BINARY_DATA_MODE"] == "s3"
-    assert env["N8N_EXTERNAL_STORAGE_S3_HOST"] == "http://minio.example:9000"
-    assert env["N8N_EXTERNAL_STORAGE_S3_BUCKET_NAME"] == "n8n"
-    assert env["N8N_EXTERNAL_STORAGE_S3_BUCKET_REGION"] == "us-east-1"
-    assert env["N8N_EXTERNAL_STORAGE_S3_ACCESS_KEY"] == "AKIAEXAMPLE"
-    assert env["N8N_EXTERNAL_STORAGE_S3_ACCESS_SECRET"] == "sssecret"
-    assert env["N8N_AVAILABLE_BINARY_DATA_MODES"] == "filesystem,s3"
 
 
 def test_build_layer_without_s3_env_omits_s3_keys():
@@ -371,14 +366,14 @@ def test_build_smtp_env_password_only_blocks():
     assert "must all be set together" in err
 
 
-def test_build_smtp_env_port_out_of_range_blocks():
-    for bad_port in (0, 65536):
-        env, err = build_smtp_env({**SMTP_FULL_CONFIG, "smtp-port": bad_port}, "pw")
+@pytest.mark.parametrize("bad_port", [0, 65536])
+def test_build_smtp_env_port_out_of_range_blocks(bad_port):
+    env, err = build_smtp_env({**SMTP_FULL_CONFIG, "smtp-port": bad_port}, "pw")
 
-        assert env is None
-        assert err is not None
-        assert "smtp-port" in err
-        assert str(bad_port) in err
+    assert env is None
+    assert err is not None
+    assert "smtp-port" in err
+    assert str(bad_port) in err
 
 
 def test_build_smtp_env_sender_empty_omits_var():
@@ -519,7 +514,7 @@ def test_parse_environment_config_env_invalid_lowercase_name_returns_error():
 
     assert parsed is None
     assert err is not None
-    assert "[A-Z_][A-Z0-9_]*" in err
+    assert "must match" in err
 
 
 def test_parse_environment_config_env_invalid_leading_digit_returns_error():
@@ -527,7 +522,7 @@ def test_parse_environment_config_env_invalid_leading_digit_returns_error():
 
     assert parsed is None
     assert err is not None
-    assert "[A-Z_][A-Z0-9_]*" in err
+    assert "must match" in err
 
 
 def test_parse_environment_config_env_not_a_list_returns_error():

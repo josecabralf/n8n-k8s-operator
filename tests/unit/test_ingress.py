@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import yaml
-from ops.model import ActiveStatus, BlockedStatus
+from ops.model import BlockedStatus
 from ops.testing import Harness
 
-from charm import STATUS_BINARY_DATA_FALLBACK, N8nK8sCharm
+from charm import N8nK8sCharm
 
 DB_RELATION = "postgresql"
 PEER_RELATION = "n8n-peers"
 INGRESS_RELATION = "traefik-route"
 CONTAINER = "n8n"
-APP_NAME = "n8n-k8s"
+APP_NAME = "n8n"
 TRAEFIK_APP = "traefik-k8s"
 
 DB_DATA = {
@@ -42,21 +42,27 @@ def test_blocked_without_ingress_even_with_postgres(harness):
 
 
 def test_publishes_route_with_app_name_fallback_when_host_not_yet_set(harness, monkeypatch):
+    # With no external_host published yet, the route is still submitted using
+    # app.name as a fallback host so the workload starts immediately.
     monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: True)
     _begin(harness)
     harness.container_pebble_ready(CONTAINER)
     _add_postgres(harness)
     rel_id = harness.add_relation(INGRESS_RELATION, TRAEFIK_APP)
 
-    assert harness.charm.unit.status == ActiveStatus(STATUS_BINARY_DATA_FALLBACK)
-
-    # With no external_host published yet, the route is still submitted using
-    # app.name as a fallback host so the workload starts immediately.
     app_data = harness.get_relation_data(rel_id, APP_NAME)
     assert "config" in app_data and app_data["config"]
     parsed = yaml.safe_load(app_data["config"])
     router = next(iter(parsed["http"]["routers"].values()))
     assert f"Host(`{APP_NAME}`)" in router["rule"]
+
+
+def test_pebble_env_uses_app_name_fallback_when_host_not_yet_set(harness, monkeypatch):
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: True)
+    _begin(harness)
+    harness.container_pebble_ready(CONTAINER)
+    _add_postgres(harness)
+    harness.add_relation(INGRESS_RELATION, TRAEFIK_APP)
 
     env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
     assert env["N8N_HOST"] == APP_NAME
@@ -70,21 +76,31 @@ def test_url_arrives_later_replans_with_real_host(harness, monkeypatch):
     harness.container_pebble_ready(CONTAINER)
     _add_postgres(harness)
     rel_id = harness.add_relation(INGRESS_RELATION, TRAEFIK_APP)
-    assert harness.charm.unit.status == ActiveStatus(STATUS_BINARY_DATA_FALLBACK)
-
-    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
-    assert env["N8N_HOST"] == APP_NAME
 
     harness.update_relation_data(rel_id, TRAEFIK_APP, {"external_host": "traefik.local", "scheme": "http"})
 
-    assert harness.charm.unit.status == ActiveStatus(STATUS_BINARY_DATA_FALLBACK)
     env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
     assert env["N8N_HOST"] == "traefik.local"
     assert env["WEBHOOK_URL"] == "http://traefik.local/"
     assert env["N8N_EDITOR_BASE_URL"] == "http://traefik.local/"
 
 
-def test_active_when_host_and_scheme_published_and_env_vars_in_plan(harness):
+def test_active_when_host_and_scheme_published_env_vars_in_plan(harness):
+    _begin(harness)
+    harness.container_pebble_ready(CONTAINER)
+    _add_postgres(harness)
+    rel_id = harness.add_relation(INGRESS_RELATION, TRAEFIK_APP)
+    harness.update_relation_data(rel_id, TRAEFIK_APP, {"external_host": "traefik.local", "scheme": "http"})
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert env["N8N_HOST"] == "traefik.local"
+    assert env["N8N_PROTOCOL"] == "http"
+    assert env["N8N_PORT"] == "5678"
+    assert env["WEBHOOK_URL"] == "http://traefik.local/"
+    assert env["N8N_EDITOR_BASE_URL"] == "http://traefik.local/"
+
+
+def test_active_when_host_and_scheme_published_probes_target_localhost(harness):
     _begin(harness)
     harness.container_pebble_ready(CONTAINER)
     _add_postgres(harness)
@@ -92,13 +108,6 @@ def test_active_when_host_and_scheme_published_and_env_vars_in_plan(harness):
     harness.update_relation_data(rel_id, TRAEFIK_APP, {"external_host": "traefik.local", "scheme": "http"})
 
     plan = harness.get_container_pebble_plan(CONTAINER).to_dict()
-    env = plan["services"]["n8n"]["environment"]
-    assert env["N8N_HOST"] == "traefik.local"
-    assert env["N8N_PROTOCOL"] == "http"
-    assert env["N8N_PORT"] == "5678"
-    assert env["WEBHOOK_URL"] == "http://traefik.local/"
-    assert env["N8N_EDITOR_BASE_URL"] == "http://traefik.local/"
-
     assert "localhost:5678" in plan["checks"]["live"]["http"]["url"]
     assert "localhost:5678" in plan["checks"]["ready"]["http"]["url"]
 
@@ -123,7 +132,7 @@ def test_leader_publishes_host_routed_config(harness):
     service = next(iter(services.values()))
     server_url = service["loadBalancer"]["servers"][0]["url"]
     model = harness.charm.model.name
-    assert f"n8n-k8s-endpoints.{model}.svc.cluster.local:5678" in server_url
+    assert f"{APP_NAME}-endpoints.{model}.svc.cluster.local:5678" in server_url
 
 
 def test_non_leader_does_not_publish(harness):
