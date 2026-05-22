@@ -195,6 +195,8 @@ class N8nK8sCharm(CharmBase):
                 logger.debug("vault-kv binding not yet available")
                 return
             subnets = [str(subnet) for subnet in binding.network.egress_subnets]
+            if binding.network.interfaces:
+                subnets.append(str(binding.network.interfaces[0].subnet))
             self._vault_kv.request_credentials(relation, subnets, nonce)
         except ops.ModelError as exc:
             logger.debug("vault-kv credential request skipped: %s", exc)
