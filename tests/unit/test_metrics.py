@@ -11,7 +11,7 @@ PEER_RELATION = "n8n-peers"
 INGRESS_RELATION = "traefik-route"
 METRICS_RELATION = "metrics-endpoint"
 CONTAINER = "n8n"
-APP_NAME = "n8n-k8s"
+APP_NAME = "n8n"
 TRAEFIK_APP = "traefik-k8s"
 PROMETHEUS_APP = "prometheus-k8s"
 

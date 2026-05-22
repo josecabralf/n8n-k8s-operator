@@ -22,7 +22,7 @@ DB_RELATION = "postgresql"
 PEER_RELATION = "n8n-peers"
 INGRESS_RELATION = "traefik-route"
 CONTAINER = "n8n"
-APP_NAME = "n8n-k8s"
+APP_NAME = "n8n"
 
 DB_DATA = {
     "endpoints": "10.1.2.3:5432",
@@ -891,7 +891,7 @@ def test_environment_unsupported_top_level_key_blocks(harness):
 
 VAULT_RELATION = "vault-k8s"
 VAULT_PROVIDER_APP = "vault-k8s"
-VAULT_MOUNT = "charm-n8n-k8s-n8n"
+VAULT_MOUNT = "charm-n8n-n8n"
 
 
 class _FakeKvV2:

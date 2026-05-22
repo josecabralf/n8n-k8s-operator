@@ -26,7 +26,7 @@ def harness_with_peer():
     """Return a leader Harness with the n8n-peers relation already added."""
     harness = Harness(N8nK8sCharm)
     harness.set_leader(True)
-    harness.add_relation(PEER_RELATION, "n8n-k8s")
+    harness.add_relation(PEER_RELATION, "n8n")
     harness.begin()
     yield harness
     harness.cleanup()

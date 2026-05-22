@@ -12,7 +12,7 @@ DB_RELATION = "postgresql"
 PEER_RELATION = "n8n-peers"
 INGRESS_RELATION = "traefik-route"
 CONTAINER = "n8n"
-APP_NAME = "n8n-k8s"
+APP_NAME = "n8n"
 TRAEFIK_APP = "traefik-k8s"
 
 DB_DATA = {
@@ -132,7 +132,7 @@ def test_leader_publishes_host_routed_config(harness):
     service = next(iter(services.values()))
     server_url = service["loadBalancer"]["servers"][0]["url"]
     model = harness.charm.model.name
-    assert f"n8n-k8s-endpoints.{model}.svc.cluster.local:5678" in server_url
+    assert f"{APP_NAME}-endpoints.{model}.svc.cluster.local:5678" in server_url
 
 
 def test_non_leader_does_not_publish(harness):
