@@ -1076,3 +1076,78 @@ def test_environment_vault_atomic_failure_drops_user_env(harness, monkeypatch):
     for k, v in EXPECTED_DB_ENV.items():
         assert env[k] == v
     assert "N8N_ENCRYPTION_KEY" in env
+
+
+def _fake_binding(egress: list[str], interface_subnet: str | None):
+    """Build a fake Binding with the network surface _request_vault_credentials touches.
+
+    Mirrors ``ops.Binding.network.egress_subnets`` (list of ipaddress networks)
+    and ``ops.Binding.network.interfaces[0].subnet`` (the pod-interface CIDR
+    that K8s charms must include — see vault_kv lib docstring example).
+    """
+    import ipaddress
+
+    egress_nets = [ipaddress.ip_network(s) for s in egress]
+    interfaces = []
+    if interface_subnet is not None:
+        iface = type("Iface", (), {"subnet": ipaddress.ip_network(interface_subnet)})()
+        interfaces = [iface]
+    network = type("Net", (), {"egress_subnets": egress_nets, "interfaces": interfaces})()
+    return type("Binding", (), {"network": network})()
+
+
+def test_request_vault_credentials_appends_pod_interface_subnet(harness, monkeypatch):
+    """K8s pod-IP fix: subnets sent to vault-kv must include the pod interface CIDR.
+
+    On K8s, ``binding.network.egress_subnets`` returns the application's
+    ClusterIP, not the pod IP the workload calls vault from. The charm must
+    also append ``binding.network.interfaces[0].subnet`` so vault's AppRole
+    CIDR allow-list covers the actual source address. Regression guard for
+    issue #30.
+    """
+    _fully_ready(harness)
+    rel_id = _set_up_vault_relation(harness)
+    relation = harness.charm.model.get_relation(VAULT_RELATION, rel_id)
+
+    monkeypatch.setattr(
+        harness.charm.model,
+        "get_binding",
+        lambda _rel: _fake_binding(egress=["10.152.183.135/32"], interface_subnet="10.1.95.0/24"),
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        harness.charm._vault_kv,
+        "request_credentials",
+        lambda rel, subnets, nonce: captured.update(rel=rel, subnets=subnets, nonce=nonce),
+    )
+
+    harness.charm._request_vault_credentials(relation)
+
+    assert captured["subnets"] == ["10.152.183.135/32", "10.1.95.0/24"]
+
+
+def test_request_vault_credentials_without_interfaces_only_sends_egress(harness, monkeypatch):
+    """When the binding has no interfaces (e.g. VM clouds), only egress subnets are sent.
+
+    Guards against an over-eager fix that would crash on bindings whose
+    ``network.interfaces`` is empty.
+    """
+    _fully_ready(harness)
+    rel_id = _set_up_vault_relation(harness)
+    relation = harness.charm.model.get_relation(VAULT_RELATION, rel_id)
+
+    monkeypatch.setattr(
+        harness.charm.model,
+        "get_binding",
+        lambda _rel: _fake_binding(egress=["192.0.2.0/24"], interface_subnet=None),
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        harness.charm._vault_kv,
+        "request_credentials",
+        lambda rel, subnets, nonce: captured.update(rel=rel, subnets=subnets, nonce=nonce),
+    )
+
+    harness.charm._request_vault_credentials(relation)
+
+    assert captured["subnets"] == ["192.0.2.0/24"]
