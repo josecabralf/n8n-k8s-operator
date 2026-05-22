@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from pebble import (
+    EnvEntry,
+    JujuEntry,
+    ParsedEnvironment,
+    VaultEntry,
+    build_environment_user_env,
     build_layer,
     build_s3_env,
     build_smtp_env,
     build_tier1_env,
     build_url_env,
+    parse_environment_config,
 )
 
 S3_CREDS = {
@@ -29,7 +35,7 @@ DB_ENV = {
 
 
 def test_build_layer_returns_n8n_service_with_six_db_env_vars():
-    layer = build_layer(DB_ENV, encryption_key="testkey")
+    layer, _ = build_layer(DB_ENV, encryption_key="testkey")
 
     service = layer["services"]["n8n"]
     assert service["command"] == "n8n start"
@@ -40,7 +46,7 @@ def test_build_layer_returns_n8n_service_with_six_db_env_vars():
 
 def test_build_layer_environment_is_copied_not_aliased():
     db_env = dict(DB_ENV)
-    layer = build_layer(db_env, encryption_key="testkey")
+    layer, _ = build_layer(db_env, encryption_key="testkey")
 
     layer["services"]["n8n"]["environment"]["DB_POSTGRESDB_PASSWORD"] = "tampered"
 
@@ -48,7 +54,7 @@ def test_build_layer_environment_is_copied_not_aliased():
 
 
 def test_build_layer_has_live_http_check_on_healthz():
-    layer = build_layer(DB_ENV, encryption_key="testkey")
+    layer, _ = build_layer(DB_ENV, encryption_key="testkey")
 
     live = layer["checks"]["live"]
     assert live["http"]["url"] == "http://localhost:5678/healthz"
@@ -57,7 +63,7 @@ def test_build_layer_has_live_http_check_on_healthz():
 
 
 def test_build_layer_has_ready_http_check_on_readiness_endpoint_with_threshold_3():
-    layer = build_layer(DB_ENV, encryption_key="testkey")
+    layer, _ = build_layer(DB_ENV, encryption_key="testkey")
 
     ready = layer["checks"]["ready"]
     assert ready["http"]["url"] == "http://localhost:5678/healthz/readiness"
@@ -67,7 +73,7 @@ def test_build_layer_has_ready_http_check_on_readiness_endpoint_with_threshold_3
 
 
 def test_build_layer_service_has_replace_override():
-    layer = build_layer(DB_ENV, encryption_key="testkey")
+    layer, _ = build_layer(DB_ENV, encryption_key="testkey")
 
     assert layer["services"]["n8n"]["override"] == "replace"
     assert layer["checks"]["live"]["override"] == "replace"
@@ -75,7 +81,7 @@ def test_build_layer_service_has_replace_override():
 
 
 def test_build_layer_injects_n8n_encryption_key():
-    layer = build_layer(DB_ENV, encryption_key="testkey")
+    layer, _ = build_layer(DB_ENV, encryption_key="testkey")
 
     environment = layer["services"]["n8n"]["environment"]
     assert environment["N8N_ENCRYPTION_KEY"] == "testkey"
@@ -108,7 +114,7 @@ def test_build_url_env_handles_https_scheme():
 
 
 def test_build_layer_without_url_env_is_unchanged():
-    layer = build_layer({"DB_TYPE": "postgresdb"}, encryption_key="k")
+    layer, _ = build_layer({"DB_TYPE": "postgresdb"}, encryption_key="k")
 
     environment = layer["services"]["n8n"]["environment"]
     assert environment["DB_TYPE"] == "postgresdb"
@@ -118,7 +124,7 @@ def test_build_layer_without_url_env_is_unchanged():
 
 
 def test_build_layer_with_url_env_merges_into_environment():
-    layer = build_layer(
+    layer, _ = build_layer(
         {"DB_TYPE": "postgresdb"},
         encryption_key="k",
         url_env=build_url_env("http://traefik.local/"),
@@ -135,7 +141,7 @@ def test_build_layer_with_url_env_merges_into_environment():
 
 
 def test_build_layer_with_metrics_env_sets_n8n_metrics():
-    layer = build_layer(
+    layer, _ = build_layer(
         {"DB_TYPE": "postgresdb"},
         encryption_key="k",
         metrics_env={"N8N_METRICS": "true"},
@@ -145,28 +151,28 @@ def test_build_layer_with_metrics_env_sets_n8n_metrics():
 
 
 def test_build_layer_without_metrics_env_omits_n8n_metrics():
-    layer = build_layer({"DB_TYPE": "postgresdb"}, encryption_key="k")
+    layer, _ = build_layer({"DB_TYPE": "postgresdb"}, encryption_key="k")
 
     assert "N8N_METRICS" not in layer["services"]["n8n"]["environment"]
 
 
 def test_build_layer_includes_binary_data_mode_when_set():
-    layer = build_layer(DB_ENV, binary_data_mode="filesystem")
+    layer, _ = build_layer(DB_ENV, binary_data_mode="filesystem")
 
     env = layer["services"]["n8n"]["environment"]
     assert env["N8N_DEFAULT_BINARY_DATA_MODE"] == "filesystem"
 
 
 def test_build_layer_omits_binary_data_mode_by_default():
-    layer = build_layer(DB_ENV)
+    layer, _ = build_layer(DB_ENV)
 
     env = layer["services"]["n8n"]["environment"]
     assert "N8N_DEFAULT_BINARY_DATA_MODE" not in env
 
 
 def test_build_layer_pebble_checks_still_target_localhost():
-    layer_no_url = build_layer(DB_ENV, encryption_key="k")
-    layer_with_url = build_layer(
+    layer_no_url, _ = build_layer(DB_ENV, encryption_key="k")
+    layer_with_url, _ = build_layer(
         DB_ENV,
         encryption_key="k",
         url_env=build_url_env("http://traefik.local/"),
@@ -243,7 +249,7 @@ def test_build_tier1_env_disable_user_registration_true_sets_env():
 
 
 def test_build_layer_merges_tier1_env():
-    layer = build_layer(DB_ENV, tier1_env={"N8N_LOG_LEVEL": "debug"})
+    layer, _ = build_layer(DB_ENV, tier1_env={"N8N_LOG_LEVEL": "debug"})
 
     assert layer["services"]["n8n"]["environment"]["N8N_LOG_LEVEL"] == "debug"
 
@@ -276,7 +282,7 @@ def test_build_s3_env_returns_empty_when_required_key_blank():
 def test_build_layer_with_s3_env_merges_into_environment():
     s3_env = build_s3_env(S3_CREDS)
 
-    layer = build_layer(
+    layer, _ = build_layer(
         DB_ENV,
         encryption_key="k",
         s3_env=s3_env,
@@ -294,7 +300,7 @@ def test_build_layer_with_s3_env_merges_into_environment():
 
 
 def test_build_layer_without_s3_env_omits_s3_keys():
-    layer = build_layer(DB_ENV, encryption_key="k")
+    layer, _ = build_layer(DB_ENV, encryption_key="k")
 
     env = layer["services"]["n8n"]["environment"]
     for key in (
@@ -399,8 +405,293 @@ def test_build_layer_includes_smtp_env():
         "N8N_SMTP_PASSWORD": "p",
         "N8N_SMTP_SSL": "false",
     }
-    layer = build_layer(DB_ENV, smtp_env=smtp_env)
+    layer, _ = build_layer(DB_ENV, smtp_env=smtp_env)
 
     environment = layer["services"]["n8n"]["environment"]
     for k, v in smtp_env.items():
         assert environment[k] == v
+
+
+# --- Tier 3 environment config (issue #8) ---
+
+
+def test_parse_environment_config_empty_returns_empty_parsed():
+    parsed, err = parse_environment_config("")
+
+    assert err is None
+    assert parsed == ParsedEnvironment()
+
+
+def test_parse_environment_config_whitespace_only_returns_empty_parsed():
+    parsed, err = parse_environment_config("   \n   ")
+
+    assert err is None
+    assert parsed == ParsedEnvironment()
+
+
+def test_parse_environment_config_env_only():
+    parsed, err = parse_environment_config(
+        "env:\n  - name: N8N_FOO\n    value: bar\n  - name: N8N_BAZ\n    value: '42'\n"
+    )
+
+    assert err is None
+    assert parsed is not None
+    assert parsed.env == [EnvEntry("N8N_FOO", "bar"), EnvEntry("N8N_BAZ", "42")]
+    assert parsed.juju == []
+    assert parsed.vault == []
+
+
+def test_parse_environment_config_coerces_env_value_to_str():
+    parsed, err = parse_environment_config("env:\n  - name: N8N_PORT_HINT\n    value: 5678\n")
+
+    assert err is None
+    assert parsed is not None
+    assert parsed.env == [EnvEntry("N8N_PORT_HINT", "5678")]
+
+
+def test_parse_environment_config_juju_only():
+    parsed, err = parse_environment_config(
+        "juju:\n  - secret-id: secret:abc\n    name: N8N_API_TOKEN\n    key: token\n"
+    )
+
+    assert err is None
+    assert parsed is not None
+    assert parsed.juju == [JujuEntry(secret_id="secret:abc", name="N8N_API_TOKEN", key="token")]
+
+
+def test_parse_environment_config_vault_only_schema_validated():
+    parsed, err = parse_environment_config("vault:\n  - path: kv/n8n\n    name: N8N_SECRET\n    key: token\n")
+
+    assert err is None
+    assert parsed is not None
+    assert parsed.vault == [VaultEntry(path="kv/n8n", name="N8N_SECRET", key="token")]
+
+
+def test_parse_environment_config_all_three_subkeys():
+    parsed, err = parse_environment_config(
+        "env:\n  - {name: A, value: x}\n"
+        "juju:\n  - {secret-id: secret:1, name: B, key: k}\n"
+        "vault:\n  - {path: kv/x, name: C, key: k}\n"
+    )
+
+    assert err is None
+    assert parsed is not None
+    assert [e.name for e in parsed.env] == ["A"]
+    assert [j.name for j in parsed.juju] == ["B"]
+    assert [v.name for v in parsed.vault] == ["C"]
+
+
+def test_parse_environment_config_malformed_yaml_returns_error():
+    parsed, err = parse_environment_config("env: [unclosed")
+
+    assert parsed is None
+    assert err is not None
+    assert "malformed YAML" in err
+
+
+def test_parse_environment_config_non_mapping_root_returns_error():
+    parsed, err = parse_environment_config("- just\n- a\n- list\n")
+
+    assert parsed is None
+    assert err is not None
+    assert "mapping" in err
+
+
+def test_parse_environment_config_unsupported_top_level_key_returns_error():
+    parsed, err = parse_environment_config("random:\n  - x\n")
+
+    assert parsed is None
+    assert err is not None
+    assert "unsupported top-level key" in err
+    assert "random" in err
+
+
+def test_parse_environment_config_env_missing_value_returns_error():
+    parsed, err = parse_environment_config("env:\n  - name: N8N_X\n")
+
+    assert parsed is None
+    assert err is not None
+    assert "value" in err
+
+
+def test_parse_environment_config_env_invalid_lowercase_name_returns_error():
+    parsed, err = parse_environment_config("env:\n  - name: n8n_foo\n    value: bar\n")
+
+    assert parsed is None
+    assert err is not None
+    assert "[A-Z_][A-Z0-9_]*" in err
+
+
+def test_parse_environment_config_env_invalid_leading_digit_returns_error():
+    parsed, err = parse_environment_config("env:\n  - name: 1FOO\n    value: bar\n")
+
+    assert parsed is None
+    assert err is not None
+    assert "[A-Z_][A-Z0-9_]*" in err
+
+
+def test_parse_environment_config_env_not_a_list_returns_error():
+    parsed, err = parse_environment_config("env:\n  name: N8N_FOO\n")
+
+    assert parsed is None
+    assert err is not None
+    assert "must be a list" in err
+
+
+def test_parse_environment_config_juju_not_a_list_returns_error():
+    parsed, err = parse_environment_config("juju:\n  name: N8N_FOO\n")
+
+    assert parsed is None
+    assert err is not None
+    assert "must be a list" in err
+
+
+def test_parse_environment_config_vault_not_a_list_returns_error():
+    parsed, err = parse_environment_config("vault:\n  name: N8N_FOO\n")
+
+    assert parsed is None
+    assert err is not None
+    assert "must be a list" in err
+
+
+def test_parse_environment_config_juju_missing_secret_id_returns_error():
+    parsed, err = parse_environment_config("juju:\n  - {name: N8N_X, key: k}\n")
+
+    assert parsed is None
+    assert err is not None
+    assert "secret-id" in err
+
+
+def test_parse_environment_config_vault_missing_path_returns_error():
+    parsed, err = parse_environment_config("vault:\n  - {name: N8N_X, key: k}\n")
+
+    assert parsed is None
+    assert err is not None
+    assert "path" in err
+
+
+def test_parse_environment_config_duplicate_env_name_returns_error():
+    parsed, err = parse_environment_config("env:\n  - {name: N8N_X, value: a}\n  - {name: N8N_X, value: b}\n")
+
+    assert parsed is None
+    assert err is not None
+    assert "duplicate env entry name 'N8N_X'" in err
+
+
+def test_parse_environment_config_duplicate_juju_name_returns_error():
+    parsed, err = parse_environment_config(
+        "juju:\n" "  - {secret-id: secret:1, name: N8N_X, key: k}\n" "  - {secret-id: secret:2, name: N8N_X, key: k}\n"
+    )
+
+    assert parsed is None
+    assert err is not None
+    assert "duplicate juju entry name 'N8N_X'" in err
+
+
+def test_parse_environment_config_cross_source_collision_is_allowed():
+    """Same name in env and juju is allowed; resolved later by precedence."""
+    parsed, err = parse_environment_config(
+        "env:\n  - {name: N8N_X, value: a}\n" "juju:\n  - {secret-id: secret:1, name: N8N_X, key: k}\n"
+    )
+
+    assert err is None
+    assert parsed is not None
+    assert parsed.env == [EnvEntry("N8N_X", "a")]
+    assert parsed.juju == [JujuEntry(secret_id="secret:1", name="N8N_X", key="k")]
+
+
+def test_build_environment_user_env_env_only():
+    parsed = ParsedEnvironment(env=[EnvEntry("N8N_FOO", "bar")])
+
+    result = build_environment_user_env(parsed, {})
+
+    assert result == {"N8N_FOO": "bar"}
+
+
+def test_build_environment_user_env_juju_only():
+    parsed = ParsedEnvironment(juju=[JujuEntry(secret_id="secret:1", name="N8N_TOKEN", key="t")])
+
+    result = build_environment_user_env(parsed, {"N8N_TOKEN": "resolved-value"})
+
+    assert result == {"N8N_TOKEN": "resolved-value"}
+
+
+def test_build_environment_user_env_juju_overrides_env_on_collision():
+    parsed = ParsedEnvironment(
+        env=[EnvEntry("N8N_X", "from-env")],
+        juju=[JujuEntry(secret_id="secret:1", name="N8N_X", key="k")],
+    )
+
+    result = build_environment_user_env(parsed, {"N8N_X": "from-juju"})
+
+    assert result == {"N8N_X": "from-juju"}
+
+
+def test_build_environment_user_env_vault_overrides_juju_and_env():
+    """Vault > juju > env precedence (sibling-issue forward compat)."""
+    parsed = ParsedEnvironment(
+        env=[EnvEntry("N8N_X", "from-env")],
+        juju=[JujuEntry(secret_id="secret:1", name="N8N_X", key="k")],
+        vault=[VaultEntry(path="kv/x", name="N8N_X", key="k")],
+    )
+
+    result = build_environment_user_env(
+        parsed,
+        resolved_juju={"N8N_X": "from-juju"},
+        resolved_vault={"N8N_X": "from-vault"},
+    )
+
+    assert result == {"N8N_X": "from-vault"}
+
+
+def test_build_environment_user_env_combines_non_colliding_sources():
+    parsed = ParsedEnvironment(
+        env=[EnvEntry("N8N_A", "a")],
+        juju=[JujuEntry(secret_id="secret:1", name="N8N_B", key="k")],
+    )
+
+    result = build_environment_user_env(parsed, {"N8N_B": "b"})
+
+    assert result == {"N8N_A": "a", "N8N_B": "b"}
+
+
+def test_build_layer_user_env_present_in_environment():
+    layer, conflicts = build_layer(DB_ENV, encryption_key="k", user_env={"N8N_PUSH_BACKEND": "websocket"})
+
+    env = layer["services"]["n8n"]["environment"]
+    assert env["N8N_PUSH_BACKEND"] == "websocket"
+    assert conflicts == []
+
+
+def test_build_layer_user_env_overridden_by_charm_managed():
+    """A user_env key collision with db_env / url_env / encryption_key etc. is dropped."""
+    layer, conflicts = build_layer(
+        DB_ENV,
+        encryption_key="k",
+        url_env=build_url_env("http://traefik.local/"),
+        user_env={"N8N_HOST": "hacked", "N8N_ENCRYPTION_KEY": "bogus", "OK_KEY": "v"},
+    )
+
+    env = layer["services"]["n8n"]["environment"]
+    assert env["N8N_HOST"] == "traefik.local"
+    assert env["N8N_ENCRYPTION_KEY"] == "k"
+    assert env["OK_KEY"] == "v"
+    assert conflicts == ["N8N_ENCRYPTION_KEY", "N8N_HOST"]
+
+
+def test_build_layer_conflicts_reported_even_when_values_match():
+    """Operator intent was overridden — flag regardless of value parity."""
+    layer, conflicts = build_layer(
+        DB_ENV,
+        encryption_key="k",
+        url_env=build_url_env("http://traefik.local/"),
+        user_env={"N8N_HOST": "traefik.local"},
+    )
+
+    assert conflicts == ["N8N_HOST"]
+
+
+def test_build_layer_user_env_none_returns_empty_conflicts():
+    layer, conflicts = build_layer(DB_ENV, encryption_key="k")
+
+    assert conflicts == []

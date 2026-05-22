@@ -129,6 +129,30 @@ config:
       description: |
         If true, disables n8n public user signup. Sets
         N8N_USER_MANAGEMENT_DISABLED.
+    environment:
+      type: string
+      default: ""
+      description: |
+        Tier 3 escape hatch for additional n8n env vars without rebuilding
+        the charm. YAML body with two sub-keys:
+
+          env:
+            - name: N8N_FOO
+              value: bar
+          juju:
+            - secret-id: secret:abc
+              name: N8N_BAZ
+              key: token
+
+        Charm-managed env vars (database, encryption key, ingress URLs,
+        S3, metrics, binary-data mode, and all Tier 1/Tier 2 typed configs)
+        take precedence over entries here. Conflicting keys are dropped
+        and surfaced in the unit status; per-key remediation hints land
+        in `juju debug-log`.
+
+        The `vault:` sub-key is schema-validated but no-op at runtime
+        until the vault-k8s relation lands (sibling v1 issue).
+        Precedence within user-supplied entries: vault > juju > env.
     smtp-host:
       type: string
       default: ""
