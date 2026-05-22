@@ -29,14 +29,16 @@ Replace `cos` with the name of your COS model if you used a different value.
 
 ## Integrate with n8n
 
-Switch to the model where n8n runs, then add each integration:
+Switch back to the model where n8n runs, then add each integration:
 
 ```bash
-juju switch <n8n-model>
+juju switch n8n-tutorial
 juju integrate n8n admin/cos.prometheus-k8s
 juju integrate n8n admin/cos.loki-k8s
 juju integrate n8n admin/cos.grafana-k8s
 ```
+
+Replace `n8n-tutorial` with the model name you used in `juju add-model` if you deviated from the tutorial.
 
 `MetricsEndpointProvider` (imported in `src/charm.py:21`) publishes scrape targets for the `metrics-endpoint` relation. `LogForwarder` (imported in `src/charm.py:20`, instantiated at `src/charm.py:115`) handles log forwarding over the `logging` relation. `GrafanaDashboardProvider` (imported in `src/charm.py:19`, instantiated at `src/charm.py:114`) publishes the dashboard JSON over the `grafana-dashboard` relation.
 

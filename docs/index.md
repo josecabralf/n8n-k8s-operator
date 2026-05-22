@@ -2,6 +2,15 @@
 
 This is the documentation set for the n8n Kubernetes charm. The pages are organised by [Diátaxis](https://diataxis.fr/) quadrant: a tutorial for first-time users, how-to guides for specific tasks, reference material for every config surface, and explanation pages for the design decisions behind v1.
 
+## In this documentation
+
+| Quadrant | When to read |
+| --- | --- |
+| [Tutorial](tutorial/getting-started.md) | First time deploying the charm. Walks from a fresh microk8s to a working n8n you can log into. |
+| [How-to guides](how-to/) | You have n8n running and need to add a capability: COS, S3, SMTP, Vault, upgrade, backup. |
+| [Reference](reference/) | Look up a config key, action, relation, or status string. Every surface, with file:line citations. |
+| [Explanation](explanation/) | Background on architecture, encryption-key handling, and v1 limitations. |
+
 ## Tutorial
 
 - [Get started with n8n](tutorial/getting-started.md) — deploy the charm on microk8s, reach `ActiveStatus`, bootstrap the owner, and capture the encryption key.
