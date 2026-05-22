@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
+import hvac.exceptions
 import pytest
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
 from ops.pebble import CheckStatus
@@ -849,22 +851,6 @@ def test_environment_invalid_yaml_blocks(harness):
     assert "malformed YAML" in status.message
 
 
-def test_environment_vault_entry_is_no_op_with_debug_log(harness, monkeypatch, caplog):
-    caplog.set_level(logging.DEBUG, logger="charm")
-    _fully_ready(harness)
-    _force_check_up(monkeypatch)
-    harness.update_config(
-        {"environment": ("vault:\n" "  - path: kv/n8n\n" "    name: N8N_VAULT_X\n" "    key: secret\n")}
-    )
-
-    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
-    # No runtime injection in v1.
-    assert "N8N_VAULT_X" not in env
-    # Debug log fires with sibling-issue reference.
-    assert "N8N_VAULT_X" in caplog.text
-    assert "not wired in v1" in caplog.text
-
-
 def test_environment_unsupported_top_level_key_blocks(harness):
     _fully_ready(harness)
     harness.update_config({"environment": "random:\n  - x\n"})
@@ -872,3 +858,221 @@ def test_environment_unsupported_top_level_key_blocks(harness):
     status = harness.charm.unit.status
     assert isinstance(status, BlockedStatus)
     assert "unsupported top-level key" in status.message
+
+
+# --- Vault-kv environment entries (issue #30) ---
+
+VAULT_RELATION = "vault-k8s"
+VAULT_PROVIDER_APP = "vault-k8s"
+VAULT_MOUNT = "charm-n8n-k8s-n8n"
+
+
+class _FakeKvV2:
+    """Stub for ``hvac.Client.secrets.kv.v2`` used by the resolver."""
+
+    def __init__(self, blobs=None, raise_path=None, raise_read=None):
+        self._blobs = blobs or {}
+        self._raise_path = raise_path
+        self._raise_read = raise_read
+
+    def read_secret_version(self, path, mount_point, raise_on_deleted_version):
+        if self._raise_path is not None:
+            raise self._raise_path
+        if self._raise_read is not None:
+            raise self._raise_read
+        if path not in self._blobs:
+            raise hvac.exceptions.InvalidPath(f"path {path} not found")
+        return {"data": {"data": self._blobs[path]}}
+
+
+class _FakeVaultClient:
+    """Minimal stand-in for ``hvac.Client`` exposing only the surface used."""
+
+    def __init__(self, blobs=None, raise_path=None, raise_read=None):
+        kv2 = _FakeKvV2(blobs=blobs, raise_path=raise_path, raise_read=raise_read)
+        self.secrets = type("S", (), {"kv": type("KV", (), {"v2": kv2})()})()
+
+
+def _set_up_vault_relation(
+    harness: Harness,
+    *,
+    vault_url: str = "https://vault.example:8200",
+    mount: str = VAULT_MOUNT,
+    role_id: str = "role-id-XYZ",
+    role_secret_id: str = "role-secret-XYZ",
+) -> int:
+    """Stand up a vault-k8s relation with provider data + unit nonce + creds secret.
+
+    Returns the relation id. Mirrors the shape of vault_kv: app databag
+    carries ``vault_url``, ``mount``, and a JSON ``credentials`` map keyed by
+    the unit's ``nonce``; the unit databag carries the matching ``nonce``;
+    the credentials map points at a Juju secret holding ``role-id`` and
+    ``role-secret-id``.
+    """
+    # The install hook (fired via begin_with_initial_hooks) has already minted
+    # the per-unit vault-kv nonce secret. Read it back so we can echo it into
+    # the relation databags.
+    nonce_secret = harness.charm.model.get_secret(label="vault-kv-nonce")
+    nonce = nonce_secret.get_content(refresh=True)["nonce"]
+
+    cred_secret_id = harness.add_user_secret(
+        {"role-id": role_id, "role-secret-id": role_secret_id},
+    )
+    harness.grant_secret(cred_secret_id, APP_NAME)
+
+    rel_id = harness.add_relation(VAULT_RELATION, VAULT_PROVIDER_APP)
+    harness.update_relation_data(
+        rel_id,
+        VAULT_PROVIDER_APP,
+        {
+            "vault_url": vault_url,
+            "mount": mount,
+            "credentials": json.dumps({nonce: cred_secret_id}),
+        },
+    )
+    # Mirror the unit nonce into the relation databag (the install handler
+    # would normally publish this via request_credentials, but Harness can't
+    # resolve the network binding so we set it directly).
+    unit_name = f"{APP_NAME}/0"
+    harness.update_relation_data(rel_id, unit_name, {"nonce": nonce})
+    return rel_id
+
+
+def test_environment_vault_entry_resolves_into_plan(harness, monkeypatch):
+    _fully_ready(harness)
+    _set_up_vault_relation(harness)
+    monkeypatch.setattr(
+        harness.charm,
+        "_vault_client_for",
+        lambda _rel: _FakeVaultClient(blobs={"myapp": {"api_token": "hunter2"}}),
+    )
+    _force_check_up(monkeypatch)
+    harness.update_config(
+        {"environment": ("vault:\n" "  - path: myapp\n" "    name: N8N_API_TOKEN\n" "    key: api_token\n")}
+    )
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert env["N8N_API_TOKEN"] == "hunter2"
+    assert isinstance(harness.charm.unit.status, ActiveStatus)
+
+
+def test_environment_vault_missing_relation_blocks(harness):
+    _fully_ready(harness)
+    # No vault-k8s relation added.
+    harness.update_config(
+        {"environment": ("vault:\n" "  - path: myapp\n" "    name: N8N_API_TOKEN\n" "    key: api_token\n")}
+    )
+
+    assert harness.charm.unit.status == BlockedStatus(
+        "environment vault entry 'N8N_API_TOKEN': vault-k8s relation not joined"
+    )
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert "N8N_API_TOKEN" not in env
+    # Charm-managed env still applied so the workload runs.
+    for k, v in EXPECTED_DB_ENV.items():
+        assert env[k] == v
+    assert "N8N_ENCRYPTION_KEY" in env
+
+
+def test_environment_vault_key_missing_blocks(harness, monkeypatch):
+    _fully_ready(harness)
+    _set_up_vault_relation(harness)
+    monkeypatch.setattr(
+        harness.charm,
+        "_vault_client_for",
+        lambda _rel: _FakeVaultClient(blobs={"myapp": {"other": "x"}}),
+    )
+    harness.update_config(
+        {"environment": ("vault:\n" "  - path: myapp\n" "    name: N8N_API_TOKEN\n" "    key: api_token\n")}
+    )
+
+    assert harness.charm.unit.status == BlockedStatus(
+        "environment vault entry 'N8N_API_TOKEN': key 'api_token' not in path 'myapp'"
+    )
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert "N8N_API_TOKEN" not in env
+
+
+def test_environment_vault_path_missing_blocks(harness, monkeypatch):
+    _fully_ready(harness)
+    _set_up_vault_relation(harness)
+    monkeypatch.setattr(
+        harness.charm,
+        "_vault_client_for",
+        lambda _rel: _FakeVaultClient(raise_path=hvac.exceptions.InvalidPath("nope")),
+    )
+    harness.update_config(
+        {"environment": ("vault:\n" "  - path: myapp\n" "    name: N8N_API_TOKEN\n" "    key: api_token\n")}
+    )
+
+    assert harness.charm.unit.status == BlockedStatus("environment vault entry 'N8N_API_TOKEN': path 'myapp' not found")
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert "N8N_API_TOKEN" not in env
+
+
+def test_environment_vault_overrides_juju_in_plan(harness, monkeypatch):
+    _fully_ready(harness)
+    _set_up_vault_relation(harness)
+    monkeypatch.setattr(
+        harness.charm,
+        "_vault_client_for",
+        lambda _rel: _FakeVaultClient(blobs={"myapp": {"k": "from-vault"}}),
+    )
+    _force_check_up(monkeypatch)
+
+    juju_secret_id = harness.add_user_secret({"key1": "from-juju"})
+    harness.grant_secret(juju_secret_id, APP_NAME)
+    harness.update_config(
+        {
+            "environment": (
+                "juju:\n"
+                f"  - secret-id: {juju_secret_id}\n"
+                "    name: N8N_X\n"
+                "    key: key1\n"
+                "vault:\n"
+                "  - path: myapp\n"
+                "    name: N8N_X\n"
+                "    key: k\n"
+            )
+        }
+    )
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert env["N8N_X"] == "from-vault"
+    assert isinstance(harness.charm.unit.status, ActiveStatus)
+
+
+def test_environment_vault_atomic_failure_drops_user_env(harness, monkeypatch):
+    _fully_ready(harness)
+    _set_up_vault_relation(harness)
+    # First entry's path resolves cleanly, second entry's key is missing.
+    monkeypatch.setattr(
+        harness.charm,
+        "_vault_client_for",
+        lambda _rel: _FakeVaultClient(
+            blobs={"path-a": {"k": "v-a"}, "path-b": {"unrelated": "x"}},
+        ),
+    )
+    harness.update_config(
+        {
+            "environment": (
+                "vault:\n"
+                "  - path: path-a\n"
+                "    name: N8N_GOOD\n"
+                "    key: k\n"
+                "  - path: path-b\n"
+                "    name: N8N_BAD\n"
+                "    key: k\n"
+            )
+        }
+    )
+
+    assert harness.charm.unit.status == BlockedStatus("environment vault entry 'N8N_BAD': key 'k' not in path 'path-b'")
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    # Atomic: neither entry lands.
+    assert "N8N_GOOD" not in env
+    assert "N8N_BAD" not in env
+    # Workload-side charm-managed envs still applied.
+    for k, v in EXPECTED_DB_ENV.items():
+        assert env[k] == v
+    assert "N8N_ENCRYPTION_KEY" in env

@@ -1,3 +1,4 @@
 ops ~= 2.21
 bcrypt ~= 4.2
 cosl >= 0.0.53
+hvac ~= 2.3
