@@ -10,13 +10,17 @@ import urllib.error
 import urllib.request
 
 import bcrypt
+import hvac
+import hvac.exceptions
 import ops
+import requests.exceptions
 from charms.data_platform_libs.v0.data_interfaces import DatabaseRequires
 from charms.data_platform_libs.v0.s3 import S3Requirer
 from charms.grafana_k8s.v0.grafana_dashboard import GrafanaDashboardProvider
 from charms.loki_k8s.v1.loki_push_api import LogForwarder
 from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 from charms.traefik_k8s.v0.traefik_route import TraefikRouteRequirer
+from charms.vault_k8s.v0 import vault_kv
 from ops import main, pebble
 from ops.charm import CharmBase
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
@@ -47,9 +51,11 @@ N8N_PORT = 5678
 ENCRYPTION_KEY_SECRET_LABEL = "n8n-encryption-key"
 ENCRYPTION_KEY_CONFIG = "encryption-key"
 ENVIRONMENT_CONFIG = "environment"
-# Filled in once the sibling vault-k8s issue exists; used in the parse-time
-# debug log and the charmcraft `environment` config description.
-VAULT_SIBLING_ISSUE = "TBD"
+
+VAULT_RELATION_NAME = "vault-k8s"
+VAULT_NONCE_SECRET_LABEL = "vault-kv-nonce"
+VAULT_CA_PATH = "/tmp/vault-ca.pem"  # noqa: S108
+VAULT_MOUNT_SUFFIX = "n8n"
 
 BINARY_DATA_STORAGE_NAME = "binary-data"
 BINARY_DATA_MOUNT_PATH = "/home/node/.n8n/binaryData"
@@ -112,8 +118,13 @@ class N8nK8sCharm(CharmBase):
         self._s3 = S3Requirer(self, S3_RELATION_NAME, bucket_name=self.app.name)
         self.framework.observe(self._s3.on.credentials_changed, self._on_s3_credentials_changed)
         self.framework.observe(self._s3.on.credentials_gone, self._on_s3_credentials_gone)
+        self._vault_kv = vault_kv.VaultKvRequires(self, VAULT_RELATION_NAME, VAULT_MOUNT_SUFFIX)
+        self.framework.observe(self._vault_kv.on.connected, self._on_vault_kv_connected)
+        self.framework.observe(self._vault_kv.on.ready, self._on_vault_kv_ready)
+        self.framework.observe(self._vault_kv.on.gone_away, self._on_vault_kv_gone_away)
 
     def _on_install(self, _event) -> None:
+        self._ensure_vault_nonce()
         self._reconcile()
 
     def _on_config_changed(self, _event) -> None:
@@ -129,7 +140,66 @@ class N8nK8sCharm(CharmBase):
         self._reconcile()
 
     def _on_update_status(self, _event) -> None:
+        relation = self.model.get_relation(VAULT_RELATION_NAME)
+        if relation is not None:
+            self._request_vault_credentials(relation)
         self._reconcile()
+
+    def _on_vault_kv_connected(self, event: vault_kv.VaultKvConnectedEvent) -> None:
+        relation = self.model.get_relation(event.relation_name, event.relation_id)
+        if relation is not None:
+            self._request_vault_credentials(relation)
+        self._reconcile()
+
+    def _on_vault_kv_ready(self, _event) -> None:
+        self._reconcile()
+
+    def _on_vault_kv_gone_away(self, _event) -> None:
+        self._reconcile()
+
+    def _ensure_vault_nonce(self) -> None:
+        """Create a per-unit Juju secret holding the vault-kv nonce (idempotent)."""
+        try:
+            self.model.get_secret(label=VAULT_NONCE_SECRET_LABEL)
+            return
+        except ops.SecretNotFoundError:
+            pass
+        self.unit.add_secret(
+            {"nonce": secrets.token_hex(16)},
+            label=VAULT_NONCE_SECRET_LABEL,
+            description="Nonce for vault-kv relation",
+        )
+
+    def _get_vault_nonce(self) -> str | None:
+        """Return the persisted vault-kv nonce, or None if missing."""
+        try:
+            secret = self.model.get_secret(label=VAULT_NONCE_SECRET_LABEL)
+            content = secret.get_content(refresh=True)
+        except (ops.SecretNotFoundError, ops.ModelError):
+            return None
+        return content.get("nonce")
+
+    def _request_vault_credentials(self, relation: ops.Relation) -> None:
+        """Publish egress subnets + nonce on the vault-kv relation.
+
+        Best-effort: model errors (e.g. binding not yet available) are
+        logged and swallowed so the handler doesn't crash.
+        """
+        nonce = self._get_vault_nonce()
+        if nonce is None:
+            logger.debug("vault-kv nonce not yet created; skipping credential request")
+            return
+        try:
+            binding = self.model.get_binding(relation)
+            if binding is None or binding.network is None:
+                logger.debug("vault-kv binding not yet available")
+                return
+            subnets = [str(subnet) for subnet in binding.network.egress_subnets]
+            if binding.network.interfaces:
+                subnets.append(str(binding.network.interfaces[0].subnet))
+            self._vault_kv.request_credentials(relation, subnets, nonce)
+        except ops.ModelError as exc:
+            logger.debug("vault-kv credential request skipped: %s", exc)
 
     def _on_secret_changed(self, _event) -> None:
         self._reconcile()
@@ -311,6 +381,85 @@ class N8nK8sCharm(CharmBase):
             resolved[entry.name] = content[entry.key]
         return (resolved, None)
 
+    def _vault_client_for(self, relation: ops.Relation) -> hvac.Client:
+        """Construct and authenticate an hvac.Client for the given vault-kv relation.
+
+        Test seam: subclass or monkeypatch to bypass the real Vault. Raises
+        ``hvac.exceptions.VaultError`` or ``requests.exceptions.RequestException``
+        on connectivity / login failure. Raises ``RuntimeError`` if relation
+        data is missing the brokered credentials Juju secret.
+        """
+        vault_url = self._vault_kv.get_vault_url(relation)
+        ca_cert = self._vault_kv.get_ca_certificate(relation)
+        cred_secret_id = self._vault_kv.get_unit_credentials(relation)
+        if cred_secret_id is None:
+            raise RuntimeError("brokered credentials secret not yet available")
+        secret = self.model.get_secret(id=cred_secret_id)
+        content = secret.get_content(refresh=True)
+        role_id = content.get("role-id") or content.get("role_id")
+        role_secret_id = content.get("role-secret-id") or content.get("role_secret_id")
+        if ca_cert:
+            with open(VAULT_CA_PATH, "w", encoding="utf-8") as fh:
+                fh.write(ca_cert)
+            verify: bool | str = VAULT_CA_PATH
+        else:
+            verify = False
+        client = hvac.Client(url=vault_url, verify=verify)
+        client.auth.approle.login(role_id=role_id, secret_id=role_secret_id)
+        return client
+
+    def _resolve_vault_entries(self, entries) -> tuple[dict[str, str] | None, str | None]:
+        """Resolve each environment.vault entry into a flat {name: value} dict.
+
+        Atomic, like ``_resolve_juju_entries``: any single failure returns
+        ``(None, msg)`` and the caller skips ``user_env`` entirely. Never
+        raises; vault errors are caught and reported via the message.
+        Secret values (role-id, role-secret-id, resolved values) are never
+        logged.
+        """
+
+        def _err(entry_name: str, reason: str) -> tuple[None, str]:
+            return (None, f"environment vault entry '{entry_name}': {reason}")
+
+        def _short(exc: BaseException) -> str:
+            text = str(exc).strip().splitlines()
+            return text[0] if text else exc.__class__.__name__
+
+        relation = self.model.get_relation(VAULT_RELATION_NAME)
+        if relation is None or relation.app is None or not dict(relation.data[relation.app]):
+            return _err(entries[0].name, "vault-k8s relation not joined")
+
+        if self._vault_kv.get_unit_credentials(relation) is None:
+            return _err(entries[0].name, "vault credentials not ready")
+        if not self._vault_kv.get_vault_url(relation) or not self._vault_kv.get_mount(relation):
+            return _err(entries[0].name, "vault credentials not ready")
+
+        try:
+            client = self._vault_client_for(relation)
+        except (hvac.exceptions.VaultError, requests.exceptions.RequestException) as exc:
+            return _err(entries[0].name, f"vault login failed ({_short(exc)})")
+        except (ops.SecretNotFoundError, ops.ModelError, RuntimeError):
+            return _err(entries[0].name, "vault credentials not ready")
+
+        mount = self._vault_kv.get_mount(relation)
+        resolved: dict[str, str] = {}
+        for entry in entries:
+            try:
+                response = client.secrets.kv.v2.read_secret_version(
+                    path=entry.path,
+                    mount_point=mount,
+                    raise_on_deleted_version=True,
+                )
+            except hvac.exceptions.InvalidPath:
+                return _err(entry.name, f"path '{entry.path}' not found")
+            except (hvac.exceptions.VaultError, requests.exceptions.RequestException) as exc:
+                return _err(entry.name, f"vault read failed ({_short(exc)})")
+            blob = response.get("data", {}).get("data", {}) if isinstance(response, dict) else {}
+            if entry.key not in blob:
+                return _err(entry.name, f"key '{entry.key}' not in path '{entry.path}'")
+            resolved[entry.name] = blob[entry.key]
+        return (resolved, None)
+
     def _reconcile(self, *, binary_data_detaching: bool = False) -> None:
         key, blocked_msg = self._effective_encryption_key()
         if blocked_msg is not None:
@@ -340,21 +489,22 @@ class N8nK8sCharm(CharmBase):
             self.unit.status = BlockedStatus(env_err)
             return
         assert parsed_env is not None  # for type narrowing
-        for vault_entry in parsed_env.vault:
-            logger.debug(
-                "environment vault entry '%s' declared but not wired in v1; tracked in issue #%s",
-                vault_entry.name,
-                VAULT_SIBLING_ISSUE,
-            )
         resolved_juju, juju_err = self._resolve_juju_entries(parsed_env.juju)
+        if parsed_env.vault:
+            resolved_vault, vault_err = self._resolve_vault_entries(parsed_env.vault)
+        else:
+            resolved_vault, vault_err = None, None
         user_env: dict[str, str] | None
         if juju_err is not None:
             user_env_blocked_msg = juju_err
             user_env = None
+        elif vault_err is not None:
+            user_env_blocked_msg = vault_err
+            user_env = None
         else:
             user_env_blocked_msg = None
             assert resolved_juju is not None
-            user_env = build_environment_user_env(parsed_env, resolved_juju)
+            user_env = build_environment_user_env(parsed_env, resolved_juju, resolved_vault)
 
         db_env = self._db_env()
         if db_env is None:

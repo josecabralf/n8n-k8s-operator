@@ -60,6 +60,10 @@ requires:
   s3:
     interface: s3
     limit: 1
+  vault-k8s:
+    interface: vault-kv
+    limit: 1
+    optional: true
 
 provides:
   metrics-endpoint:
@@ -134,7 +138,7 @@ config:
       default: ""
       description: |
         Tier 3 escape hatch for additional n8n env vars without rebuilding
-        the charm. YAML body with two sub-keys:
+        the charm. YAML body with three sub-keys:
 
           env:
             - name: N8N_FOO
@@ -143,6 +147,10 @@ config:
             - secret-id: secret:abc
               name: N8N_BAZ
               key: token
+          vault:
+            - path: myapp
+              name: N8N_API_TOKEN
+              key: api_token
 
         Charm-managed env vars (database, encryption key, ingress URLs,
         S3, metrics, binary-data mode, and all Tier 1/Tier 2 typed configs)
@@ -150,9 +158,11 @@ config:
         and surfaced in the unit status; per-key remediation hints land
         in `juju debug-log`.
 
-        The `vault:` sub-key is schema-validated but no-op at runtime
-        until the vault-k8s relation lands (sibling v1 issue).
-        Precedence within user-supplied entries: vault > juju > env.
+        `vault:` entries are resolved at runtime against the `vault-k8s`
+        relation; if `vault:` entries are present but no vault-k8s
+        relation is joined the unit goes Blocked.
+        Precedence within user-supplied entries (last-writer-wins on
+        collision): vault > juju > env.
     smtp-host:
       type: string
       default: ""
@@ -222,6 +232,9 @@ parts:
     source: .
     charm-binary-python-packages:
       - bcrypt~=4.2
+      - ops-scenario>=7.0.1,<8.0.0
+      - pytest-interface-tester
+      - pydantic
     override-prime: |
       craftctl default
       chmod +x src/charm.py

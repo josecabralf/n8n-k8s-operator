@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+from charms.loki_k8s.v1.loki_push_api import LogForwarder
 from ops.model import ActiveStatus
 from ops.pebble import CheckStatus
 from ops.testing import Harness
-
-from charms.loki_k8s.v1.loki_push_api import LogForwarder
 
 DB_RELATION = "postgresql"
 PEER_RELATION = "n8n-peers"

@@ -93,8 +93,8 @@ class VaultEntry(NamedTuple):
 class ParsedEnvironment:
     """Parsed shape of the `environment` config option (issue #8).
 
-    `vault` is schema-validated but not resolved at runtime in v1; vault
-    runtime wiring lands in the sibling vault-k8s issue.
+    `vault` entries are resolved at reconcile time by the charm via
+    `hvac` over the `vault-k8s` relation (issue #30).
     """
 
     env: list[EnvEntry] = field(default_factory=list)
@@ -128,7 +128,7 @@ def parse_environment_config(yaml_str: str) -> tuple[ParsedEnvironment | None, s
 
     `env:` entries: ``{name: str, value: str}``. ``value`` coerced via ``str()``.
     `juju:` entries: ``{secret-id: str, name: str, key: str}``.
-    `vault:` entries: ``{path: str, name: str, key: str}`` (schema-only in v1).
+    `vault:` entries: ``{path: str, name: str, key: str}``.
     `name` must match ``[A-Z_][A-Z0-9_]*``. Duplicate ``name`` within the
     same source is a parse error (always a typo); cross-source collisions
     are allowed and resolved by precedence in ``build_environment_user_env``.
@@ -238,12 +238,8 @@ def build_environment_user_env(
     Precedence within user-supplied entries (highest wins): vault > juju > env.
     Rationale: more-deliberate / more-secret sources override less-deliberate
     ones, so operators can migrate an `env:` plaintext entry to a `juju:`
-    secret (or later a `vault:` entry) by adding the new entry without
-    deleting the old one in the same step.
-
-    In v1 (#8) `resolved_vault` is always empty, so the operative rule is
-    `juju > env`. The vault parameter exists so the sibling vault-k8s issue
-    is purely additive — no signature churn.
+    secret (or a `vault:` entry) by adding the new entry without deleting
+    the old one in the same step.
 
     Duplicates within the same source are already rejected at parse time
     (see ``parse_environment_config``).
