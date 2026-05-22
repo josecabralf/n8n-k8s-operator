@@ -232,6 +232,9 @@ parts:
     source: .
     charm-binary-python-packages:
       - bcrypt~=4.2
+      - ops-scenario>=7.0.1,<8.0.0
+      - pytest-interface-tester
+      - pydantic
     override-prime: |
       craftctl default
       chmod +x src/charm.py
