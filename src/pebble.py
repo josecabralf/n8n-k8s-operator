@@ -70,6 +70,10 @@ CHARM_MANAGED_ENV_ORIGIN: dict[str, str] = {
     "N8N_SMTP_PASSWORD": "use 'juju config n8n-k8s smtp-password=...' instead",
     "N8N_SMTP_SSL": "use 'juju config n8n-k8s smtp-ssl-tls=...' instead",
     "N8N_SMTP_SENDER": "use 'juju config n8n-k8s smtp-sender=...' instead",
+    # Task runner.
+    "N8N_RUNNERS_ENABLED": "use 'juju config n8n-k8s task-runner=...' instead",
+    "N8N_RUNNERS_MAX_CONCURRENCY": "use 'juju config n8n-k8s runner-max-concurrency=...' instead",
+    "N8N_RUNNERS_TASK_TIMEOUT": "use 'juju config n8n-k8s runner-process-timeout=...' instead",
 }
 
 
@@ -347,6 +351,32 @@ def build_tier1_env(
     return (env, None)
 
 
+def build_runner_env(
+    config: Mapping[str, Any],
+) -> tuple[dict[str, str] | None, str | None]:
+    """Translate the internal task-runner configs into n8n env vars.
+
+    Returns ({}, None) when task-runner is disabled (no N8N_RUNNERS_* vars);
+    (env, None) when enabled; (None, msg) when a value is invalid.
+    """
+    if not bool(config.get("task-runner", False)):
+        return ({}, None)
+    max_concurrency = int(config.get("runner-max-concurrency", 5))
+    if max_concurrency < 1:
+        return (None, "runner-max-concurrency must be >= 1")
+    task_timeout = int(config.get("runner-process-timeout", 300))
+    if task_timeout < 1:
+        return (None, "runner-process-timeout must be >= 1")
+    return (
+        {
+            "N8N_RUNNERS_ENABLED": "true",
+            "N8N_RUNNERS_MAX_CONCURRENCY": str(max_concurrency),
+            "N8N_RUNNERS_TASK_TIMEOUT": str(task_timeout),
+        },
+        None,
+    )
+
+
 S3_REQUIRED_KEYS = ("endpoint", "bucket", "region", "access-key", "secret-key")
 
 
@@ -412,6 +442,7 @@ def build_layer(
     encryption_key: str = "",
     url_env: Mapping[str, str] | None = None,
     tier1_env: Mapping[str, str] | None = None,
+    runner_env: Mapping[str, str] | None = None,
     smtp_env: Mapping[str, str] | None = None,
     metrics_env: Mapping[str, str] | None = None,
     s3_env: Mapping[str, str] | None = None,
@@ -438,6 +469,10 @@ def build_layer(
         tier1_env: Optional mapping of Tier 1 n8n env vars derived from
             charm config (logging, timezone, executions retention,
             user-management toggle).
+        runner_env: Optional mapping of internal task-runner env vars
+            (``N8N_RUNNERS_ENABLED``, ``N8N_RUNNERS_MAX_CONCURRENCY``,
+            ``N8N_RUNNERS_TASK_TIMEOUT``) derived from the ``task-runner``
+            charm config. Empty/omitted when the task runner is disabled.
         smtp_env: Optional mapping of Tier 2 SMTP env vars (``N8N_SMTP_HOST``,
             ``N8N_SMTP_PORT``, ``N8N_SMTP_USER``, ``N8N_SMTP_PASSWORD``,
             ``N8N_SMTP_SSL`` and optionally ``N8N_SMTP_SENDER``). Merged
@@ -474,6 +509,8 @@ def build_layer(
     charm_managed: dict[str, str] = dict(db_env)
     if tier1_env:
         charm_managed.update(tier1_env)
+    if runner_env:
+        charm_managed.update(runner_env)
     if smtp_env:
         charm_managed.update(smtp_env)
     if url_env:

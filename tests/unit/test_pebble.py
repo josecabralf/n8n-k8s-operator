@@ -11,6 +11,7 @@ from pebble import (
     VaultEntry,
     build_environment_user_env,
     build_layer,
+    build_runner_env,
     build_s3_env,
     build_smtp_env,
     build_tier1_env,
@@ -259,6 +260,71 @@ def test_build_layer_merges_tier1_env():
     layer, _ = build_layer(DB_ENV, tier1_env={"N8N_LOG_LEVEL": "debug"})
 
     assert layer["services"]["n8n"]["environment"]["N8N_LOG_LEVEL"] == "debug"
+
+
+# --- Internal task runner env tests (issue #40) ---
+
+
+def test_build_runner_env_disabled_returns_empty():
+    env, err = build_runner_env({})
+
+    assert err is None
+    assert env == {}
+    for key in ("N8N_RUNNERS_ENABLED", "N8N_RUNNERS_MAX_CONCURRENCY", "N8N_RUNNERS_TASK_TIMEOUT"):
+        assert key not in env
+
+
+def test_build_runner_env_enabled_defaults():
+    env, err = build_runner_env({"task-runner": True})
+
+    assert err is None
+    assert env is not None
+    assert env["N8N_RUNNERS_ENABLED"] == "true"
+    assert env["N8N_RUNNERS_MAX_CONCURRENCY"] == "5"
+    assert env["N8N_RUNNERS_TASK_TIMEOUT"] == "300"
+
+
+def test_build_runner_env_max_concurrency_override():
+    env, err = build_runner_env({"task-runner": True, "runner-max-concurrency": 4})
+
+    assert err is None
+    assert env is not None
+    assert env["N8N_RUNNERS_MAX_CONCURRENCY"] == "4"
+
+
+def test_build_runner_env_process_timeout_override():
+    env, err = build_runner_env({"task-runner": True, "runner-process-timeout": 120})
+
+    assert err is None
+    assert env is not None
+    assert env["N8N_RUNNERS_TASK_TIMEOUT"] == "120"
+
+
+def test_build_runner_env_invalid_max_concurrency_returns_error():
+    env, err = build_runner_env({"task-runner": True, "runner-max-concurrency": 0})
+
+    assert env is None
+    assert err == "runner-max-concurrency must be >= 1"
+
+
+def test_build_runner_env_invalid_process_timeout_returns_error():
+    env, err = build_runner_env({"task-runner": True, "runner-process-timeout": 0})
+
+    assert env is None
+    assert err == "runner-process-timeout must be >= 1"
+
+
+def test_build_layer_merges_runner_env():
+    runner_env = {
+        "N8N_RUNNERS_ENABLED": "true",
+        "N8N_RUNNERS_MAX_CONCURRENCY": "5",
+        "N8N_RUNNERS_TASK_TIMEOUT": "300",
+    }
+    layer, _ = build_layer(DB_ENV, encryption_key="k", runner_env=runner_env)
+
+    environment = layer["services"]["n8n"]["environment"]
+    for k, v in runner_env.items():
+        assert environment[k] == v
 
 
 def test_build_s3_env_returns_expected_n8n_env_vars():

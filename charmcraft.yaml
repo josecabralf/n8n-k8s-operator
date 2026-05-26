@@ -206,6 +206,24 @@ config:
       description: |
         If true, use implicit TLS for SMTP (port 465 style). Sets
         N8N_SMTP_SSL.
+    task-runner:
+      type: boolean
+      default: false
+      description: |
+        Enables the n8n internal task runner (child-process node
+        execution); sets N8N_RUNNERS_ENABLED. Independent of queue mode.
+    runner-max-concurrency:
+      type: int
+      default: 5
+      description: |
+        Sets N8N_RUNNERS_MAX_CONCURRENCY; applied only when task-runner
+        is true. Must be >= 1.
+    runner-process-timeout:
+      type: int
+      default: 300
+      description: |
+        Sets N8N_RUNNERS_TASK_TIMEOUT (max seconds for a single task);
+        applied only when task-runner is true. Must be >= 1.
 
 actions:
   get-encryption-key:
@@ -230,6 +248,11 @@ actions:
       last-name:
         type: string
     required: [email, password, first-name, last-name]
+  restart:
+    description: |
+      Restart the n8n workload container. Pebble stops and starts the n8n
+      service; the unit is not reconfigured. Safe to run at any time, but
+      in-flight workflow executions are interrupted.
 
 parts:
   charm:

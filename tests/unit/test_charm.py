@@ -13,6 +13,9 @@ from ops.testing import ActionFailed, Harness
 
 from charm import (
     ERR_ALREADY_BOOTSTRAPPED,
+    ERR_CONTAINER_NOT_READY,
+    ERR_SERVICE_NOT_CONFIGURED,
+    STATUS_RESTARTING,
     STATUS_WAITING_N8N,
     N8nK8sCharm,
 )
@@ -306,6 +309,43 @@ def test_config_timezone_sets_both_env_vars(harness):
     assert env["TZ"] == "Europe/Madrid"
 
 
+# --- Internal task runner (issue #40) ---
+
+
+def test_task_runner_disabled_by_default_omits_env(harness):
+    _fully_ready(harness)
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert "N8N_RUNNERS_ENABLED" not in env
+    assert "N8N_RUNNERS_MAX_CONCURRENCY" not in env
+    assert "N8N_RUNNERS_TASK_TIMEOUT" not in env
+
+
+def test_task_runner_enabled_sets_default_env(harness):
+    _fully_ready(harness)
+    harness.update_config({"task-runner": True})
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert env["N8N_RUNNERS_ENABLED"] == "true"
+    assert env["N8N_RUNNERS_MAX_CONCURRENCY"] == "5"
+    assert env["N8N_RUNNERS_TASK_TIMEOUT"] == "300"
+
+
+def test_task_runner_max_concurrency_override_propagates_to_env(harness):
+    _fully_ready(harness)
+    harness.update_config({"task-runner": True, "runner-max-concurrency": 4})
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert env["N8N_RUNNERS_MAX_CONCURRENCY"] == "4"
+
+
+def test_task_runner_invalid_max_concurrency_blocks(harness):
+    _fully_ready(harness)
+    harness.update_config({"task-runner": True, "runner-max-concurrency": 0})
+
+    assert isinstance(harness.charm.unit.status, BlockedStatus)
+
+
 # --- Owner bootstrap (issue #5) ---
 
 
@@ -449,6 +489,52 @@ def test_pebble_check_failed_re_evaluates(harness, monkeypatch):
     harness.charm.on.n8n_pebble_check_failed.emit(workload=container, check_name="ready")
 
     assert harness.charm.unit.status == MaintenanceStatus(STATUS_WAITING_N8N)
+
+
+# --- Restart action (issue #35) ---
+
+
+def test_restart_action_restarts_service(harness):
+    _fully_ready(harness)
+
+    container = harness.charm.unit.get_container(CONTAINER)
+    original_restart = container.restart
+    calls: list[str] = []
+
+    def _wrapped_restart(name, *args, **kwargs):
+        calls.append(name)
+        return original_restart(name, *args, **kwargs)
+
+    container.restart = _wrapped_restart
+
+    output = harness.run_action("restart")
+
+    assert output.results == {"restarted": True}
+    assert calls == ["n8n"]
+    # _reconcile() ran afterwards, so we are no longer in the transient status.
+    assert harness.charm.unit.status != MaintenanceStatus(STATUS_RESTARTING)
+    # Call-through means the service is actually running again.
+    assert harness.charm.unit.get_container(CONTAINER).get_service("n8n").is_running()
+
+
+def test_restart_action_fails_when_container_not_ready(harness):
+    _begin(harness)
+    harness.set_can_connect(CONTAINER, False)
+
+    with pytest.raises(ActionFailed) as exc_info:
+        harness.run_action("restart")
+    assert exc_info.value.message == ERR_CONTAINER_NOT_READY
+
+
+def test_restart_action_fails_when_service_not_in_plan(harness):
+    # Connectable container but no postgres → _reconcile() never adds the n8n
+    # service layer (stays Blocked), so the service is absent from the plan.
+    _begin(harness)
+    harness.container_pebble_ready(CONTAINER)
+
+    with pytest.raises(ActionFailed) as exc_info:
+        harness.run_action("restart")
+    assert exc_info.value.message == ERR_SERVICE_NOT_CONFIGURED
 
 
 # --- Tier 2 SMTP configs (issue #7) ---

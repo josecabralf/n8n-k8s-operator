@@ -23,13 +23,14 @@ This is the documentation set for the n8n Kubernetes charm. The pages are organi
 - [Set extra env vars with `environment`](how-to/use-environment-escape-hatch.md) — the Tier 3 escape hatch for vars without a typed config.
 - [Integrate Vault for secret resolution](how-to/integrate-vault.md) — resolve `vault:` entries from a running vault-k8s.
 - [Upgrade n8n](how-to/upgrade.md) — `juju refresh` workflow and pre-refresh checklist.
+- [Restart the n8n workload](how-to/restart-workload.md) — cycle the workload service with the `restart` action without reconfiguring the unit.
 - [Back up and restore n8n](how-to/backup-and-restore.md) — capture the encryption key, the database, and the binary-data store.
 - [Build a derived n8n image](how-to/build-derived-image.md) — install community nodes by attaching a custom OCI image.
 
 ## Reference
 
 - [Configuration options](reference/configurations.md) — every config key with type, default, env-var mapping, and validation.
-- [Actions](reference/actions.md) — `get-encryption-key` and `create-admin`.
+- [Actions](reference/actions.md) — `get-encryption-key`, `create-admin`, and `restart`.
 - [Relations](reference/relations.md) — required and optional relations, their interfaces and semantics.
 - [Statuses](reference/statuses.md) — every `BlockedStatus`, `WaitingStatus`, `MaintenanceStatus`, and `ActiveStatus` message the charm emits.
 
