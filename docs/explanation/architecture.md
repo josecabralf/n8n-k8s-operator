@@ -4,7 +4,9 @@ The charm runs a single `n8n` container managed by Pebble and exposes seven rela
 
 ## Single container, single service
 
-The `n8n` container is declared in `charmcraft.yaml` with one storage mount (`binary-data` at `/home/node/.n8n/binaryData`). Inside that container, a single Pebble service named `n8n` runs with `command: n8n start`, `override: replace`, and `startup: enabled`. There is no queue mode, worker pool, or separate runner process in v1; every workflow execution runs in the same process that the `n8n start` command launches.
+The `n8n` container is declared in `charmcraft.yaml` with one storage mount (`binary-data` at `/home/node/.n8n/binaryData`). Inside that container, a single Pebble service named `n8n` runs with `command: n8n start`, `override: replace`, and `startup: enabled`. There is no queue mode, worker pool, or separate container in v1.
+
+With `task-runner=true`, n8n spawns a child runner process inside the same container to execute workflow code nodes. This is still one Pebble service and one container, not a queue-mode topology; Pebble manages only the `n8n start` process, which launches the runner as its child. With the default `task-runner=false`, every workflow execution runs in the same process that `n8n start` launches.
 
 ## State and peer relation
 
