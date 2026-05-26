@@ -86,7 +86,7 @@ The unit is performing an operation and is temporarily unavailable.
 
 - **`"starting n8n"`** — the Pebble layer has been applied and the service replanned, but the readiness probe has not yet been checked.
 
-- **`"waiting for n8n to start"`** — Pebble is connected and the layer is active, but the HTTP readiness probe at `http://localhost:5678` has not yet returned a successful response.
+- **`"waiting for n8n to start"`** — Pebble is connected and the layer is active, but the HTTP readiness probe at `http://localhost:5678/healthz/readiness` has not yet returned a successful response.
 
 ---
 

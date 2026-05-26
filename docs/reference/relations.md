@@ -22,7 +22,7 @@ All endpoints are declared in `charmcraft.yaml`.
 
 **ingress** (required, interface `ingress`, limit 1). The charm requests ingress through the provider-agnostic `ingress` v2 interface using `charms.traefik_k8s.v2.ingress.IngressPerAppRequirer`. Any v2-compatible provider satisfies it, including `traefik-k8s` and `nginx-ingress-integrator`. The charm publishes its routing requirements (app name, model, port `5678`) and reads the external URL the provider returns. It does not publish provider-specific router or service config.
 
-The external URL drives the n8n env vars `N8N_HOST`, `N8N_PROTOCOL`, `N8N_PORT`, `WEBHOOK_URL`, `N8N_EDITOR_BASE_URL`, and `N8N_PATH`. `N8N_PATH` is derived from the URL subpath. Traefik v2 defaults to path-based routing of the form `http://<host>/<model>-<app>/`, so `N8N_PATH` is what makes the UI, static assets, and webhooks resolve correctly under that subpath.
+The charm sets six env vars in `src/pebble.py` from the external URL. `N8N_HOST` is the URL hostname; `N8N_PATH` is the URL subpath (normalised to `/<path>/`); `WEBHOOK_URL` and `N8N_EDITOR_BASE_URL` are set to the full external URL. `N8N_PROTOCOL` is fixed to `"http"` and `N8N_PORT` to `"5678"` regardless of the external URL, because n8n listens on plain HTTP inside the pod and TLS terminates at the ingress proxy. Traefik v2 defaults to path-based routing of the form `<scheme>://<host>/<model>-<app>/` (scheme follows the provider's TLS configuration), so `N8N_PATH` is what makes the UI, static assets, and webhooks resolve correctly under that subpath.
 
 - **Interface**: `ingress`
 - **Limit**: 1
