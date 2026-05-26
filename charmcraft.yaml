@@ -230,6 +230,11 @@ actions:
       last-name:
         type: string
     required: [email, password, first-name, last-name]
+  restart:
+    description: |
+      Restart the n8n workload container. Pebble stops and starts the n8n
+      service; the unit is not reconfigured. Safe to run at any time, but
+      in-flight workflow executions are interrupted.
 
 parts:
   charm:

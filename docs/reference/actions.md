@@ -45,3 +45,20 @@ Creates the n8n initial owner account. Declared in `charmcraft.yaml`.
   - `"peer relation not yet joined; retry"` — peer relation not yet established
   - `"n8n container not yet connectable"` — Pebble socket not available
   - `"owner already exists; use n8n UI to manage users"` — an owner is already present
+
+---
+
+## `restart`
+
+Stops and restarts the n8n workload service. Declared in `charmcraft.yaml`.
+
+- **Description**: Cycles the `n8n` service in the Pebble plan. The unit is not reconfigured; config is not re-read and relations are not re-resolved beyond the reconcile that runs afterward to restore status.
+- **Parameters**: none
+- **Leader-only**: no; runs per unit
+- **Idempotent**: yes; the running process is cycled, no state is mutated
+- **Side effects**:
+  - Stops and restarts the `n8n` Pebble service. Any in-flight workflow executions are interrupted.
+  - Sets `MaintenanceStatus("restarting n8n")` while the service cycles, then re-runs the reconcile path to restore status (typically `ActiveStatus`).
+- **Failure modes**:
+  - `"n8n container not yet connectable"` — Pebble socket not available
+  - `"n8n service not configured yet; nothing to restart"` — the `n8n` service is not yet in the Pebble plan (for example, required relations are not satisfied)
