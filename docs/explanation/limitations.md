@@ -17,9 +17,11 @@ the manual migration path.
 
 Without `binary-data` storage attached or an S3 relation active, n8n stores workflow attachments directly in PostgreSQL. The charm surfaces this condition as the active status message `"binary data in DB; attach 'binary-data' storage or relate s3-integrator for production use"`. PostgreSQL in-DB storage works for low-volume use but does not suit production deployments with large or frequent file attachments. Attach the `binary-data` storage or integrate `s3-integrator` before going to production.
 
-## No internal task runner
+## No queue mode or external runners
 
-v1 runs a single n8n process that handles both the web UI and workflow execution. There is no queue mode, dedicated worker pool, or internal task runner. Workflows that generate sustained high execution load should be addressed by vertical scaling (larger Kubernetes resource limits) until a queue-mode slice is implemented.
+The internal task runner is supported. Set `task-runner=true` (see [configurations.md](../reference/configurations.md)) and n8n runs workflow code nodes in a child process inside the same container, tuned by `runner-max-concurrency` and `runner-process-timeout`. It is opt-in; with the default `task-runner=false` the charm runs a single process for both the web UI and workflow execution.
+
+Queue mode, external task runners, and Redis are not implemented in v1; they are tracked separately. The internal runner shares the unit's resource limits, so workflows that generate sustained high execution load should still be addressed by vertical scaling (larger Kubernetes resource limits) until a queue-mode slice lands.
 
 ## No rollback hooks
 

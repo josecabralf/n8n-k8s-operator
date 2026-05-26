@@ -115,6 +115,42 @@ Prevents new users from self-registering via the n8n UI. Declared in `charmcraft
 
 ---
 
+## Task runner options
+
+The three task-runner keys enable and tune n8n's internal task runner, which executes workflow code nodes in a child process inside the same container. All are declared in `charmcraft.yaml`. The charm key names differ from the n8n env var names. With `task-runner` left at `false` (the default), the charm emits none of the `N8N_RUNNERS_*` env vars. This does **not** disable the runner: current n8n images run their internal task runner by default, so `task-runner=false` means *the charm does not manage the runner* — n8n applies its own defaults (for example `N8N_RUNNERS_MAX_CONCURRENCY=10`), not that the runner is off. Setting `task-runner=true` emits all three vars and pins them to the charm-configured values; `runner-max-concurrency` and `runner-process-timeout` are applied only in that case.
+
+### `task-runner`
+
+Enables the internal task runner. Declared in `charmcraft.yaml`.
+
+- **Type**: `boolean`
+- **Default**: `false`
+- **Env var**: `N8N_RUNNERS_ENABLED`
+- **Validation**: none beyond type coercion
+- **BlockedStatus on invalid**: none
+
+### `runner-max-concurrency`
+
+Maximum number of tasks the runner executes concurrently. Applied only when `task-runner` is `true`. Declared in `charmcraft.yaml`.
+
+- **Type**: `int`
+- **Default**: `5`
+- **Env var**: `N8N_RUNNERS_MAX_CONCURRENCY`
+- **Validation**: must be `>= 1`
+- **BlockedStatus on invalid**: `"runner-max-concurrency must be >= 1"`
+
+### `runner-process-timeout`
+
+Maximum seconds a single task may run before the runner terminates it. Applied only when `task-runner` is `true`. Declared in `charmcraft.yaml`.
+
+- **Type**: `int`
+- **Default**: `300`
+- **Env var**: `N8N_RUNNERS_TASK_TIMEOUT`
+- **Validation**: must be `>= 1`
+- **BlockedStatus on invalid**: `"runner-process-timeout must be >= 1"`
+
+---
+
 ## SMTP options
 
 The six SMTP keys configure outbound email for workflow notifications and user invitations. All are declared in `charmcraft.yaml`. `smtp-host`, `smtp-user`, and `smtp-password` must be set together or all left empty; setting any subset blocks the unit.
