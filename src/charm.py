@@ -29,6 +29,7 @@ from pebble import (
     CHARM_MANAGED_ENV_ORIGIN,
     build_environment_user_env,
     build_layer,
+    build_runner_env,
     build_s3_env,
     build_smtp_env,
     build_tier1_env,
@@ -474,6 +475,11 @@ class N8nK8sCharm(CharmBase):
             self.unit.status = BlockedStatus(tier1_err)
             return
 
+        runner_env, runner_err = build_runner_env(self.config)
+        if runner_err is not None:
+            self.unit.status = BlockedStatus(runner_err)
+            return
+
         smtp_pw, smtp_pw_err = self._resolve_secret_uri("smtp-password")
         if smtp_pw_err is not None:
             self.unit.status = BlockedStatus(smtp_pw_err)
@@ -546,6 +552,7 @@ class N8nK8sCharm(CharmBase):
             key,
             url_env=build_url_env(url),
             tier1_env=tier1_env,
+            runner_env=runner_env,
             smtp_env=smtp_env,
             metrics_env=metrics_env,
             s3_env=s3_env,

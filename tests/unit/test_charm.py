@@ -305,6 +305,43 @@ def test_config_timezone_sets_both_env_vars(harness):
     assert env["TZ"] == "Europe/Madrid"
 
 
+# --- Internal task runner (issue #40) ---
+
+
+def test_task_runner_disabled_by_default_omits_env(harness):
+    _fully_ready(harness)
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert "N8N_RUNNERS_ENABLED" not in env
+    assert "N8N_RUNNERS_MAX_CONCURRENCY" not in env
+    assert "N8N_RUNNERS_TASK_TIMEOUT" not in env
+
+
+def test_task_runner_enabled_sets_default_env(harness):
+    _fully_ready(harness)
+    harness.update_config({"task-runner": True})
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert env["N8N_RUNNERS_ENABLED"] == "true"
+    assert env["N8N_RUNNERS_MAX_CONCURRENCY"] == "5"
+    assert env["N8N_RUNNERS_TASK_TIMEOUT"] == "300"
+
+
+def test_task_runner_max_concurrency_override_propagates_to_env(harness):
+    _fully_ready(harness)
+    harness.update_config({"task-runner": True, "runner-max-concurrency": 4})
+
+    env = harness.get_container_pebble_plan(CONTAINER).to_dict()["services"]["n8n"]["environment"]
+    assert env["N8N_RUNNERS_MAX_CONCURRENCY"] == "4"
+
+
+def test_task_runner_invalid_max_concurrency_blocks(harness):
+    _fully_ready(harness)
+    harness.update_config({"task-runner": True, "runner-max-concurrency": 0})
+
+    assert isinstance(harness.charm.unit.status, BlockedStatus)
+
+
 # --- Owner bootstrap (issue #5) ---
 
 
