@@ -86,6 +86,8 @@ The unit is performing an operation and is temporarily unavailable.
 
 - **`"waiting for n8n to start"`** — Pebble is connected and the layer is active, but the HTTP readiness probe at `http://localhost:5678` has not yet returned a successful response.
 
+- **`"restarting n8n"`** — transient status shown while the `restart` action cycles the workload service. The charm re-runs its reconcile path afterward to restore status.
+
 ---
 
 ## ActiveStatus

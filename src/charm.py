@@ -72,6 +72,8 @@ ERR_ALREADY_BOOTSTRAPPED = "owner already exists; use n8n UI to manage users"
 ERR_NOT_LEADER = "create-admin must run on the leader unit"
 ERR_PEER_NOT_READY = "peer relation not yet joined; retry"
 ERR_CONTAINER_NOT_READY = "n8n container not yet connectable"
+STATUS_RESTARTING = "restarting n8n"
+ERR_SERVICE_NOT_CONFIGURED = "n8n service not configured yet; nothing to restart"
 
 
 class N8nK8sCharm(CharmBase):
@@ -98,6 +100,7 @@ class N8nK8sCharm(CharmBase):
         self.framework.observe(self.on[DB_RELATION_NAME].relation_broken, self._on_database_broken)
         self.framework.observe(self.on.get_encryption_key_action, self._on_get_encryption_key_action)
         self.framework.observe(self.on.create_admin_action, self._on_create_admin_action)
+        self.framework.observe(self.on.restart_action, self._on_restart_action)
         self.framework.observe(self.on[INGRESS_RELATION_NAME].relation_created, self._on_ingress_changed)
         self.framework.observe(self.on[INGRESS_RELATION_NAME].relation_changed, self._on_ingress_changed)
         self.framework.observe(self.on[INGRESS_RELATION_NAME].relation_broken, self._on_ingress_changed)
@@ -298,6 +301,23 @@ class N8nK8sCharm(CharmBase):
         container.replan()
 
         event.set_results({"created": True, "email": email})
+
+    def _on_restart_action(self, event: ops.ActionEvent) -> None:
+        container = self.unit.get_container(CONTAINER_NAME)
+        if not container.can_connect():
+            event.fail(ERR_CONTAINER_NOT_READY)
+            return
+        if SERVICE_NAME not in container.get_plan().services:
+            event.fail(ERR_SERVICE_NOT_CONFIGURED)
+            return
+        self.unit.status = MaintenanceStatus(STATUS_RESTARTING)
+        try:
+            container.restart(SERVICE_NAME)
+        except pebble.Error as exc:
+            event.fail(f"failed to restart n8n: {exc}")
+            return
+        self._reconcile()
+        event.set_results({"restarted": True})
 
     def _resolve_secret_uri(self, config_name: str) -> tuple[str | None, str | None]:
         """Look up a Juju secret referenced by a config option.
