@@ -27,10 +27,11 @@ ENV_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 # key is logged. Adding a new charm-managed env means adding a row here too;
 # otherwise the conflict warning falls back to a generic message.
 CHARM_MANAGED_ENV_ORIGIN: dict[str, str] = {
-    # Ingress-derived (traefik_route relation).
+    # Ingress-derived.
     "N8N_HOST": "set by ingress relation",
     "N8N_PROTOCOL": "set by ingress relation",
     "N8N_PORT": "set by ingress relation",
+    "N8N_PATH": "set by ingress relation",
     "WEBHOOK_URL": "set by ingress relation",
     "N8N_EDITOR_BASE_URL": "set by ingress relation",
     # Postgres-derived (postgresql relation).
@@ -273,13 +274,17 @@ def build_url_env(external_url: str) -> dict[str, str]:
     """Return n8n env vars derived from an external URL.
 
     N8N_PROTOCOL is fixed to "http" because TLS terminates at the
-    ingress; n8n listens plaintext in-pod.
+    ingress; n8n listens plaintext in-pod. N8N_PATH is derived from the
+    URL path so the UI/assets/webhooks work under a subpath route.
     """
     parsed = urlparse(external_url)
+    stripped = parsed.path.strip("/")
+    n8n_path = f"/{stripped}/" if stripped else "/"
     return {
         "N8N_HOST": parsed.hostname or "",
         "N8N_PROTOCOL": "http",
         "N8N_PORT": "5678",
+        "N8N_PATH": n8n_path,
         "WEBHOOK_URL": external_url,
         "N8N_EDITOR_BASE_URL": external_url,
     }

@@ -104,8 +104,16 @@ def test_build_url_env_returns_expected_keys():
 
     assert url_env["N8N_PROTOCOL"] == "http"
     assert url_env["N8N_PORT"] == "5678"
+    assert url_env["N8N_PATH"] == "/"
     assert url_env["WEBHOOK_URL"] == "http://traefik.local/"
     assert url_env["N8N_EDITOR_BASE_URL"] == "http://traefik.local/"
+
+
+def test_build_url_env_subpath_sets_n8n_path():
+    url_env = build_url_env("http://traefik.local/my-model-n8n")
+
+    assert url_env["N8N_HOST"] == "traefik.local"
+    assert url_env["N8N_PATH"] == "/my-model-n8n/"
 
 
 def test_build_url_env_handles_https_scheme():
@@ -123,7 +131,7 @@ def test_build_layer_without_url_env_is_unchanged():
     environment = layer["services"]["n8n"]["environment"]
     assert environment["DB_TYPE"] == "postgresdb"
     assert environment["N8N_ENCRYPTION_KEY"] == "k"
-    for key in ("N8N_HOST", "N8N_PROTOCOL", "N8N_PORT", "WEBHOOK_URL", "N8N_EDITOR_BASE_URL"):
+    for key in ("N8N_HOST", "N8N_PROTOCOL", "N8N_PORT", "N8N_PATH", "WEBHOOK_URL", "N8N_EDITOR_BASE_URL"):
         assert key not in environment
 
 

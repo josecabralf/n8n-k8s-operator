@@ -8,7 +8,7 @@ from ops.testing import Harness
 
 DB_RELATION = "postgresql"
 PEER_RELATION = "n8n-peers"
-INGRESS_RELATION = "traefik-route"
+INGRESS_RELATION = "ingress"
 METRICS_RELATION = "metrics-endpoint"
 CONTAINER = "n8n"
 APP_NAME = "n8n"
@@ -21,10 +21,11 @@ DB_DATA = {
     "password": "s3cret",
     "database": "n8n",
 }
-INGRESS_DATA = {"external_host": "traefik.local", "scheme": "http"}
+INGRESS_DATA = {"ingress": json.dumps({"url": "http://traefik.local/"})}
 
 
 def _begin(harness: Harness) -> None:
+    harness.set_model_name("my-model")
     harness.add_relation(PEER_RELATION, APP_NAME)
     harness.begin_with_initial_hooks()
 

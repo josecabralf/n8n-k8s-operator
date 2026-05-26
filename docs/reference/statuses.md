@@ -38,7 +38,7 @@ The unit requires operator intervention before it can proceed.
 
 - **`"waiting for postgresql relation"`** — no `postgresql` relation is joined. Resolve by running `juju integrate n8n postgresql-k8s`.
 
-- **`"waiting for ingress relation"`** — no `traefik-route` relation is joined. Resolve by running `juju integrate n8n traefik-k8s`.
+- **`"waiting for ingress relation"`** — no `ingress` relation is joined. Resolve by running `juju integrate n8n:ingress traefik-k8s`.
 
 ### `environment` config parse errors
 
@@ -73,6 +73,8 @@ The unit is healthy but waiting for an external dependency.
 - **`"waiting for encryption key"`** — emitted on follower units before the leader has written the encryption key secret ID to the peer databag, or while the peer relation itself is still joining.
 
 - **`"waiting for database credentials"`** — the `postgresql` relation is joined but connection credentials have not yet been populated in the relation data.
+
+- **`"waiting for ingress URL"`** — the `ingress` relation is joined but the provider has not published an external URL yet.
 
 ---
 

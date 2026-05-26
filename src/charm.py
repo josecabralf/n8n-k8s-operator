@@ -19,7 +19,7 @@ from charms.data_platform_libs.v0.s3 import S3Requirer
 from charms.grafana_k8s.v0.grafana_dashboard import GrafanaDashboardProvider
 from charms.loki_k8s.v1.loki_push_api import LogForwarder
 from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
-from charms.traefik_k8s.v0.traefik_route import TraefikRouteRequirer
+from charms.traefik_k8s.v2.ingress import IngressPerAppRequirer
 from charms.vault_k8s.v0 import vault_kv
 from ops import main, pebble
 from ops.charm import CharmBase
@@ -43,7 +43,7 @@ CONTAINER_NAME = "n8n"
 SERVICE_NAME = "n8n"
 DB_RELATION_NAME = "postgresql"
 METRICS_RELATION_NAME = "metrics-endpoint"
-INGRESS_RELATION_NAME = "traefik-route"
+INGRESS_RELATION_NAME = "ingress"
 S3_RELATION_NAME = "s3"
 DATABASE_NAME = "n8n"
 N8N_PORT = 5678
@@ -97,14 +97,17 @@ class N8nK8sCharm(CharmBase):
         self.framework.observe(self.on[DB_RELATION_NAME].relation_broken, self._on_database_broken)
         self.framework.observe(self.on.get_encryption_key_action, self._on_get_encryption_key_action)
         self.framework.observe(self.on.create_admin_action, self._on_create_admin_action)
-        self.framework.observe(self.on[INGRESS_RELATION_NAME].relation_created, self._on_ingress_changed)
-        self.framework.observe(self.on[INGRESS_RELATION_NAME].relation_changed, self._on_ingress_changed)
-        self.framework.observe(self.on[INGRESS_RELATION_NAME].relation_broken, self._on_ingress_changed)
         self.framework.observe(self.on[BINARY_DATA_STORAGE_NAME].storage_attached, self._on_storage_attached)
         self.framework.observe(self.on[BINARY_DATA_STORAGE_NAME].storage_detaching, self._on_storage_detaching)
-        ingress_relation = self.model.get_relation(INGRESS_RELATION_NAME)
-        if ingress_relation is not None:
-            self._traefik_route = TraefikRouteRequirer(self, ingress_relation, INGRESS_RELATION_NAME)
+        self._ingress = IngressPerAppRequirer(
+            self,
+            relation_name=INGRESS_RELATION_NAME,
+            port=N8N_PORT,
+            strip_prefix=False,
+            scheme="http",
+        )
+        self.framework.observe(self._ingress.on.ready, self._on_ingress_changed)
+        self.framework.observe(self._ingress.on.revoked, self._on_ingress_changed)
         self._metrics = MetricsEndpointProvider(
             self,
             relation_name=METRICS_RELATION_NAME,
@@ -222,10 +225,6 @@ class N8nK8sCharm(CharmBase):
         self._reconcile()
 
     def _on_ingress_changed(self, _event) -> None:
-        if not hasattr(self, "_traefik_route"):
-            ingress_relation = self.model.get_relation(INGRESS_RELATION_NAME)
-            if ingress_relation is not None:
-                self._traefik_route = TraefikRouteRequirer(self, ingress_relation, INGRESS_RELATION_NAME)
         self._reconcile()
 
     def _on_storage_attached(self, _event) -> None:
@@ -517,11 +516,10 @@ class N8nK8sCharm(CharmBase):
         if self.model.get_relation(INGRESS_RELATION_NAME) is None:
             self.unit.status = BlockedStatus("waiting for ingress relation")
             return
-        external_host = self._external_host()
-        hostname = external_host or self.app.name
-        scheme = self._scheme() or "http"
-        url = f"{scheme}://{hostname}/"
-        self._publish_traefik_route(hostname)
+        url = self._ingress.url
+        if not url:
+            self.unit.status = WaitingStatus("waiting for ingress URL")
+            return
 
         container = self.unit.get_container(CONTAINER_NAME)
         if not container.can_connect():
@@ -594,42 +592,6 @@ class N8nK8sCharm(CharmBase):
             logger.debug("owner-setup probe inconclusive: %s", exc)
             return None
         return not bool(show_setup)
-
-    def _external_host(self) -> str:
-        return self._traefik_route.external_host if hasattr(self, "_traefik_route") else ""
-
-    def _scheme(self) -> str:
-        return self._traefik_route.scheme if hasattr(self, "_traefik_route") else ""
-
-    def _publish_traefik_route(self, hostname: str) -> None:
-        if not hasattr(self, "_traefik_route") or not self.unit.is_leader() or not self._traefik_route.is_ready():
-            return
-        router_name = f"juju-{self.model.name}-{self.app.name}"
-        service_name = f"{router_name}-service"
-        self._traefik_route.submit_to_traefik(
-            config={
-                "http": {
-                    "routers": {
-                        router_name: {
-                            "entryPoints": ["web"],
-                            "rule": f"Host(`{hostname}`)",
-                            "service": service_name,
-                        },
-                    },
-                    "services": {
-                        service_name: {
-                            "loadBalancer": {
-                                "servers": [
-                                    {
-                                        "url": f"http://{self.app.name}-endpoints.{self.model.name}.svc.cluster.local:{N8N_PORT}"
-                                    }
-                                ],
-                            },
-                        },
-                    },
-                },
-            },
-        )
 
     def _binary_data_attached(self) -> bool:
         """True iff the binary-data filesystem storage is attached to this unit."""
