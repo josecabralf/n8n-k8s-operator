@@ -59,8 +59,8 @@ requires:
   postgresql:
     interface: postgresql_client
     limit: 1
-  traefik-route:
-    interface: traefik_route
+  ingress:
+    interface: ingress
     limit: 1
   s3:
     interface: s3

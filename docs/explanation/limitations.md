@@ -37,9 +37,20 @@ tested and may leave the database schema in an inconsistent state.
 ## Relation `limit: 1`
 
 Every `requires` relation in `charmcraft.yaml` declares `limit: 1`: `postgresql`,
-`traefik-route`, `s3`, `logging`, and `vault-k8s`. Multi-provider topologies, such
+`ingress`, `s3`, `logging`, and `vault-k8s`. Multi-provider topologies, such
 as two PostgreSQL backends or two ingress endpoints, are not supported. Attempting to
 add a second provider for any of these relations will be rejected by Juju.
+
+## Ingress endpoint renamed (breaking change)
+
+Ingress now uses the provider-agnostic `ingress` interface, requested over an endpoint named `ingress`. Earlier charm revisions exposed ingress over a `traefik-route` endpoint (interface `traefik_route`). That endpoint no longer exists. After upgrading, the old `traefik-route` relation is gone and the operator must re-relate on `ingress`:
+
+```bash
+juju remove-relation n8n:traefik-route traefik-k8s
+juju integrate n8n:ingress traefik-k8s
+```
+
+Because the endpoint speaks the `ingress` v2 interface, any v2-compatible provider satisfies it, not only `traefik-k8s`. `nginx-ingress-integrator` is one alternative.
 
 ## `assumes:` block
 

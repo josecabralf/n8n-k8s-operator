@@ -105,7 +105,7 @@ juju integrate n8n s3-integrator
 
 ```bash
 juju integrate n8n postgresql-k8s
-juju integrate n8n traefik-k8s
+juju integrate n8n:ingress traefik-k8s
 ```
 
 Integrate s3-integrator if you are using S3 binary data (already done in step

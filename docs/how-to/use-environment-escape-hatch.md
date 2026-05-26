@@ -130,7 +130,7 @@ the same name. This lets you migrate a plaintext `env:` entry to a `juju:` or
 
 The following categories of env vars are owned by the charm and cannot be overridden via `environment`. Categories, with one example each:
 
-- **Ingress** (`N8N_HOST`, derived from the `traefik-route` relation)
+- **Ingress** (`N8N_HOST`, derived from the `ingress` relation)
 - **PostgreSQL** (`DB_POSTGRESDB_HOST`, derived from the `postgresql` relation)
 - **Encryption key** (`N8N_ENCRYPTION_KEY`, managed by the charm or the
   `encryption-key` config)

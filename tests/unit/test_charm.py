@@ -23,7 +23,7 @@ from state import ENCRYPTION_KEY_SECRET_ID, PEER_RELATION_NAME
 
 DB_RELATION = "postgresql"
 PEER_RELATION = "n8n-peers"
-INGRESS_RELATION = "traefik-route"
+INGRESS_RELATION = "ingress"
 CONTAINER = "n8n"
 APP_NAME = "n8n"
 
@@ -34,7 +34,7 @@ DB_DATA = {
     "database": "n8n",
 }
 
-INGRESS_DATA = {"external_host": "traefik.local", "scheme": "http"}
+INGRESS_DATA = {"ingress": json.dumps({"url": "http://traefik.local/"})}
 
 EXPECTED_DB_ENV = {
     "DB_TYPE": "postgresdb",
@@ -47,6 +47,7 @@ EXPECTED_DB_ENV = {
 
 
 def _begin(harness: Harness) -> None:
+    harness.set_model_name("my-model")
     harness.add_relation(PEER_RELATION, APP_NAME)
     harness.begin_with_initial_hooks()
 

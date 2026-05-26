@@ -18,14 +18,26 @@ All endpoints are declared in `charmcraft.yaml`.
 
 ---
 
-### `traefik-route`
+### `ingress`
 
-**traefik-route** (required, interface `traefik_route`, limit 1). The charm requires ingress to publish the n8n URL and configure Traefik routing rules. The charm reads `external_host` and `scheme` from the relation and publishes a Traefik router config with router name `juju-<model>-<app>`, host rule `Host(\`<hostname>\`)`, and backend service URL `http://<app>-endpoints.<model>.svc.cluster.local:5678`. The external URL is `<scheme>://<hostname>/`; the hostname falls back to the application name when `external_host` is empty.
+**ingress** (required, interface `ingress`, limit 1). The charm requests ingress through the provider-agnostic `ingress` v2 interface using `charms.traefik_k8s.v2.ingress.IngressPerAppRequirer`. Any v2-compatible provider satisfies it, including `traefik-k8s` and `nginx-ingress-integrator`. The charm publishes its routing requirements (app name, model, port `5678`) and reads the external URL the provider returns. It does not publish provider-specific router or service config.
 
-- **Interface**: `traefik_route`
+The charm sets six env vars in `src/pebble.py` from the external URL. `N8N_HOST` is the URL hostname; `N8N_PATH` is the URL subpath (normalised to `/<path>/`); `WEBHOOK_URL` and `N8N_EDITOR_BASE_URL` are set to the full external URL. `N8N_PROTOCOL` is fixed to `"http"` and `N8N_PORT` to `"5678"` regardless of the external URL, because n8n listens on plain HTTP inside the pod and TLS terminates at the ingress proxy. Traefik v2 defaults to path-based routing of the form `<scheme>://<host>/<model>-<app>/` (scheme follows the provider's TLS configuration), so `N8N_PATH` is what makes the UI, static assets, and webhooks resolve correctly under that subpath.
+
+- **Interface**: `ingress`
 - **Limit**: 1
 - **Optional**: no
 - **When absent**: unit blocks with `"waiting for ingress relation"`
+- **When relation present but the provider has not published a URL yet**: unit waits with `"waiting for ingress URL"`
+
+#### Migrating from `traefik-route`
+
+Earlier charm revisions exposed ingress over a `traefik-route` endpoint (interface `traefik_route`). That endpoint no longer exists. After upgrading, the old `traefik-route` relation is gone and the operator must re-relate on `ingress`:
+
+```bash
+juju remove-relation n8n:traefik-route traefik-k8s
+juju integrate n8n:ingress traefik-k8s
+```
 
 ---
 

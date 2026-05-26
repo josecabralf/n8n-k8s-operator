@@ -38,7 +38,7 @@ The unit requires operator intervention before it can proceed.
 
 - **`"waiting for postgresql relation"`** — no `postgresql` relation is joined. Resolve by running `juju integrate n8n postgresql-k8s`.
 
-- **`"waiting for ingress relation"`** — no `traefik-route` relation is joined. Resolve by running `juju integrate n8n traefik-k8s`.
+- **`"waiting for ingress relation"`** — no `ingress` relation is joined. Resolve by running `juju integrate n8n:ingress traefik-k8s`.
 
 ### `environment` config parse errors
 
@@ -74,6 +74,8 @@ The unit is healthy but waiting for an external dependency.
 
 - **`"waiting for database credentials"`** — the `postgresql` relation is joined but connection credentials have not yet been populated in the relation data.
 
+- **`"waiting for ingress URL"`** — the `ingress` relation is joined but the provider has not published an external URL yet.
+
 ---
 
 ## MaintenanceStatus
@@ -84,7 +86,7 @@ The unit is performing an operation and is temporarily unavailable.
 
 - **`"starting n8n"`** — the Pebble layer has been applied and the service replanned, but the readiness probe has not yet been checked.
 
-- **`"waiting for n8n to start"`** — Pebble is connected and the layer is active, but the HTTP readiness probe at `http://localhost:5678` has not yet returned a successful response.
+- **`"waiting for n8n to start"`** — Pebble is connected and the layer is active, but the HTTP readiness probe at `http://localhost:5678/healthz/readiness` has not yet returned a successful response.
 
 - **`"restarting n8n"`** — transient status shown while the `restart` action cycles the workload service. The charm re-runs its reconcile path afterward to restore status.
 

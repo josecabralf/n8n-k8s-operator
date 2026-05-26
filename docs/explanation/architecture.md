@@ -1,6 +1,6 @@
 # Architecture
 
-The charm runs a single `n8n` container managed by Pebble and exposes seven relation surfaces: `postgresql` (database), `s3` (binary-data object storage), `grafana-dashboard` (Grafana integration), `logging` (Loki log forwarding), `metrics-endpoint` (Prometheus scrape), `traefik-route` (ingress), and `vault-k8s` (secrets backend). Each relation surface connects directly to the corresponding charm library with no intermediate wrapper layer.
+The charm runs a single `n8n` container managed by Pebble and exposes seven relation surfaces: `postgresql` (database), `s3` (binary-data object storage), `grafana-dashboard` (Grafana integration), `logging` (Loki log forwarding), `metrics-endpoint` (Prometheus scrape), `ingress` (HTTP ingress), and `vault-k8s` (secrets backend). Each relation surface connects directly to the corresponding charm library with no intermediate wrapper layer.
 
 ## Single container, single service
 
@@ -26,4 +26,4 @@ Encryption-key generation, ingress publication, and the `create-admin` action ar
 
 ## Relation surfaces
 
-The charm exposes seven relation endpoints. `postgresql` supplies the database credentials n8n requires to persist workflow state. `s3` connects to an S3-compatible store for binary workflow attachments. `grafana-dashboard`, `logging`, and `metrics-endpoint` wire the unit into a COS Lite observability stack (Grafana, Loki, and Prometheus respectively). `traefik-route` registers the unit with Traefik for HTTP ingress. `vault-k8s` provides a Vault KV backend as an alternative secrets store.
+The charm exposes seven relation endpoints. `postgresql` supplies the database credentials n8n requires to persist workflow state. `s3` connects to an S3-compatible store for binary workflow attachments. `grafana-dashboard`, `logging`, and `metrics-endpoint` wire the unit into a COS Lite observability stack (Grafana, Loki, and Prometheus respectively). `ingress` requests HTTP ingress over the provider-agnostic `ingress` v2 interface (`charms.traefik_k8s.v2.ingress.IngressPerAppRequirer`), so any v2-compatible provider works, such as `traefik-k8s` or `nginx-ingress-integrator`. The charm auto-publishes its routing requirements through the requirer and reads back the external URL; it does not build or submit provider-specific routing config. The URL drives the n8n env vars `N8N_HOST`, `N8N_PROTOCOL`, `N8N_PORT`, `WEBHOOK_URL`, `N8N_EDITOR_BASE_URL`, and `N8N_PATH`. `N8N_PATH` carries the URL subpath so the UI and webhooks resolve under path-based routing. `vault-k8s` provides a Vault KV backend as an alternative secrets store.

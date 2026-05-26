@@ -25,15 +25,14 @@ When the relation is joined, the charm requests AppRole credentials bound to the
 
 ## Reference a Vault secret from `environment`
 
-Set the `environment` config key with one or more `vault:` entries. Each entry names the secret (`name`), the KV path within the mount (`path`), and the field to extract (`key`):
+Set the `environment` config key with a top-level `vault:` list. Each entry sets one environment variable (`name`) from a Vault KV v2 path (`path`) and field (`key`):
 
 ```yaml
 environment: |
-  N8N_ENCRYPTION_KEY:
-    vault:
-      name: encryption-key
-      path: n8n/credentials
-      key: encryption_key
+  vault:
+    - path: n8n/credentials
+      name: N8N_EXTERNAL_API_KEY
+      key: api_token
 ```
 
 `name` becomes the environment variable injected into the n8n container. `path` is relative to the mount root. `key` is the field name inside the KV v2 secret data.
