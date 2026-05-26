@@ -117,7 +117,7 @@ Prevents new users from self-registering via the n8n UI. Declared in `charmcraft
 
 ## Task runner options
 
-The three task-runner keys enable and tune n8n's internal task runner, which executes workflow code nodes in a child process inside the same container. All are declared in `charmcraft.yaml`. The charm key names differ from the n8n env var names. With `task-runner` left at `false` (the default), none of the `N8N_RUNNERS_*` env vars are emitted and behaviour is unchanged. Setting `task-runner=true` emits all three vars; `runner-max-concurrency` and `runner-process-timeout` are applied only in that case.
+The three task-runner keys enable and tune n8n's internal task runner, which executes workflow code nodes in a child process inside the same container. All are declared in `charmcraft.yaml`. The charm key names differ from the n8n env var names. With `task-runner` left at `false` (the default), the charm emits none of the `N8N_RUNNERS_*` env vars. This does **not** disable the runner: current n8n images run their internal task runner by default, so `task-runner=false` means *the charm does not manage the runner* — n8n applies its own defaults (for example `N8N_RUNNERS_MAX_CONCURRENCY=10`), not that the runner is off. Setting `task-runner=true` emits all three vars and pins them to the charm-configured values; `runner-max-concurrency` and `runner-process-timeout` are applied only in that case.
 
 ### `task-runner`
 
