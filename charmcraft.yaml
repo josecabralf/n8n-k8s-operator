@@ -35,7 +35,7 @@ resources:
   n8n-image:
     type: oci-image
     description: OCI image for n8n.
-    upstream-source: docker.n8n.io/n8nio/n8n@sha256:32d7475fd061772a88e485f804f7079dd5641f35502116d1389dcff269c2d72e
+    upstream-source: docker.n8n.io/n8nio/n8n@sha256:c0c39b1ca69d43f736bc65f8ddd70972a8989f736e8a4b6a075823f98cc48a23
 
 peers:
   n8n-peers:
