@@ -78,9 +78,23 @@ def test_env_vars_set_when_url_published(harness, monkeypatch):
     assert env["N8N_HOST"] == "traefik.local"
     assert env["N8N_PROTOCOL"] == "http"
     assert env["N8N_PORT"] == "5678"
-    assert env["N8N_PATH"] == "/"
+    assert env["N8N_PROXY_HOPS"] == "1"
+    assert "N8N_PATH" not in env
     assert env["WEBHOOK_URL"] == "http://traefik.local/"
     assert env["N8N_EDITOR_BASE_URL"] == "http://traefik.local/"
+
+
+def test_https_url_derives_https_protocol(harness, monkeypatch):
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: True)
+    _begin(harness)
+    harness.container_pebble_ready(CONTAINER)
+    _add_postgres(harness)
+    _add_ingress(harness, url="https://n8n.example.com/")
+
+    env = _env(harness)
+    assert env["N8N_PROTOCOL"] == "https"
+    assert env["N8N_HOST"] == "n8n.example.com"
+    assert env["WEBHOOK_URL"] == "https://n8n.example.com/"
 
 
 def test_url_change_replans_with_new_host(harness):

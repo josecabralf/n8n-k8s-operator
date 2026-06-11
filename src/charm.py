@@ -107,7 +107,6 @@ class N8nK8sCharm(CharmBase):
             self,
             relation_name=INGRESS_RELATION_NAME,
             port=N8N_PORT,
-            strip_prefix=True,
             scheme="http",
         )
         self.framework.observe(self._ingress.on.ready, self._on_ingress_changed)

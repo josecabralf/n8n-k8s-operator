@@ -31,7 +31,7 @@ CHARM_MANAGED_ENV_ORIGIN: dict[str, str] = {
     "N8N_HOST": "set by ingress relation",
     "N8N_PROTOCOL": "set by ingress relation",
     "N8N_PORT": "set by ingress relation",
-    "N8N_PATH": "set by ingress relation",
+    "N8N_PROXY_HOPS": "set by ingress relation",
     "WEBHOOK_URL": "set by ingress relation",
     "N8N_EDITOR_BASE_URL": "set by ingress relation",
     # Postgres-derived (postgresql relation).
@@ -277,18 +277,20 @@ def build_environment_user_env(
 def build_url_env(external_url: str) -> dict[str, str]:
     """Return n8n env vars derived from an external URL.
 
-    N8N_PROTOCOL is fixed to "http" because TLS terminates at the
-    ingress; n8n listens plaintext in-pod. N8N_PATH is derived from the
-    URL path so the UI/assets/webhooks work under a subpath route.
+    N8N_PROTOCOL follows the URL scheme so n8n generates https links
+    when TLS terminates at the ingress proxy; n8n itself still listens
+    plaintext in-pod (N8N_PORT stays the listen port, 5678).
+    N8N_PROXY_HOPS=1 makes n8n trust X-Forwarded-* headers from the
+    single fronting proxy. N8N_PATH is deliberately not set: routing is
+    host-based (app served at the root of a subdomain), per n8n's
+    reverse-proxy guidance.
     """
     parsed = urlparse(external_url)
-    stripped = parsed.path.strip("/")
-    n8n_path = f"/{stripped}/" if stripped else "/"
     return {
         "N8N_HOST": parsed.hostname or "",
-        "N8N_PROTOCOL": "http",
+        "N8N_PROTOCOL": parsed.scheme or "http",
         "N8N_PORT": "5678",
-        "N8N_PATH": n8n_path,
+        "N8N_PROXY_HOPS": "1",
         "WEBHOOK_URL": external_url,
         "N8N_EDITOR_BASE_URL": external_url,
     }
@@ -465,7 +467,7 @@ def build_layer(
             yet been updated.
         url_env: Optional mapping of ingress-derived env vars
             (``N8N_HOST``, ``N8N_PROTOCOL``, ``N8N_PORT``,
-            ``WEBHOOK_URL``, ``N8N_EDITOR_BASE_URL``).
+            ``N8N_PROXY_HOPS``, ``WEBHOOK_URL``, ``N8N_EDITOR_BASE_URL``).
         tier1_env: Optional mapping of Tier 1 n8n env vars derived from
             charm config (logging, timezone, executions retention,
             user-management toggle).
