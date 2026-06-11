@@ -26,11 +26,14 @@ The charm sets six env vars in `src/pebble.py` from the external URL. `N8N_HOST`
 
 The charm expects host-based routing — n8n served at the root of a subdomain, per n8n's reverse-proxy guidance — so it sets no `N8N_PATH` and requests no prefix stripping. Configure the provider accordingly: on `traefik-k8s`, set `routing_mode=subdomain` and `external_hostname`; on `nginx-ingress-integrator`, set `service-hostname`. n8n defaults to `N8N_SECURE_COOKIE=true`, so login requires HTTPS at the proxy; HTTP-only test setups can override it through the `environment` config option.
 
+Because `N8N_PROTOCOL` is taken verbatim from the scheme of the URL the provider publishes, it is only `https` when the provider advertises an `https` URL. `traefik-k8s` advertises `https` when TLS terminates at it. `nginx-ingress-integrator`, however, publishes an `http` URL even when it terminates TLS, so the charm sets `N8N_PROTOCOL=http` behind it; the links n8n generates (webhooks, editor base URL) then carry the `http` scheme regardless of the externally reachable scheme.
+
 - **Interface**: `ingress`
 - **Limit**: 1
 - **Optional**: no
 - **When absent**: unit blocks with `"waiting for ingress relation"`
 - **When relation present but the provider has not published a URL yet**: unit waits with `"waiting for ingress URL"`
+- **When the provider withdraws a previously-published URL** (for example, clearing `external_hostname` on a `traefik-k8s` provider in `routing_mode=subdomain`): the app becomes unreachable (`404`), but the charm does not detect it. Verified at runtime: the unit stays `active` with the stale URL-derived env (`N8N_HOST`, `N8N_PROTOCOL`, `WEBHOOK_URL`, `N8N_EDITOR_BASE_URL`). Reconciles still run, but `self._ingress.url` does not report the withdrawal as empty, so the unit never returns to `"waiting for ingress URL"`. There is no status for "URL withdrawn after being present" — see [statuses.md](statuses.md).
 
 #### Migrating from `traefik-route`
 

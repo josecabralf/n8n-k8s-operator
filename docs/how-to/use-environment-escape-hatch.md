@@ -42,6 +42,21 @@ env:
     value: "false"
 ```
 
+`env:` also reaches n8n settings the charm leaves at their defaults. n8n
+defaults `N8N_SECURE_COOKIE` to `true`, which requires HTTPS for login. For a
+throwaway HTTP-only test setup, override it:
+
+```yaml
+env:
+  - name: N8N_SECURE_COOKIE
+    value: "false"
+```
+
+The charm does not manage `N8N_SECURE_COOKIE`, so this override is applied. The
+ingress-derived envs (`N8N_HOST`, `N8N_PROTOCOL`, `N8N_PROXY_HOPS`,
+`WEBHOOK_URL`, `N8N_EDITOR_BASE_URL`) are owned by the `ingress` relation and
+cannot be overridden this way (see "Charm-managed envs" below).
+
 Save that block to a file and apply it:
 
 ```bash

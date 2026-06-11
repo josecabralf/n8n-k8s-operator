@@ -52,6 +52,16 @@ juju integrate n8n:ingress traefik-k8s
 
 Because the endpoint speaks the `ingress` v2 interface, any v2-compatible provider satisfies it, not only `traefik-k8s`. `nginx-ingress-integrator` is one alternative.
 
+## Path-based ingress is unsupported
+
+The charm serves n8n only at the root of a subdomain, never under a URL subpath. n8n emits root-relative links for its UI assets and static files, so path-based routing produces a broken UI: the index page loads, but asset requests resolve against the proxy root and return 404. The charm therefore sets no `N8N_PATH` and requests no prefix stripping. Host-based routing is the only supported topology, not a default that can be overridden.
+
+## `external_hostname` is required, and clearing it strands the unit
+
+With `traefik-k8s` in `routing_mode=subdomain`, `external_hostname` must be set. Traefik builds the published subdomain `<model>-<app>.<external_hostname>` from it; with no hostname to build from, Traefik withdraws the ingress URL entirely and requests return 404.
+
+When the URL is withdrawn this way, the charm has a known rough edge, confirmed at runtime: it keeps the stale URL-derived env (`N8N_HOST`, `N8N_PROTOCOL`, `WEBHOOK_URL`, `N8N_EDITOR_BASE_URL`) in the running Pebble layer and the unit stays `active`, so the status gives no sign that ingress is broken. The reconcile loop does guard against a missing URL — it sets `"waiting for ingress URL"` when `self._ingress.url` is empty — and reconciles keep running on `update-status`, but the guard never trips: `self._ingress.url` does not report the withdrawal as empty (the requirer does not surface the now-empty provider databag, surfaced as the `'app' expected but not received` warning, [Juju #1960934](https://bugs.launchpad.net/juju/+bug/1960934)). Until that is addressed, a 404 on a previously working deployment can coexist with an `active` unit, and the cause is usually that `external_hostname` was cleared.
+
 ## `assumes:` block
 
 The charm declares two deployment requirements in `charmcraft.yaml`:

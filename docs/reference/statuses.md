@@ -74,7 +74,7 @@ The unit is healthy but waiting for an external dependency.
 
 - **`"waiting for database credentials"`** — the `postgresql` relation is joined but connection credentials have not yet been populated in the relation data.
 
-- **`"waiting for ingress URL"`** — the `ingress` relation is joined but the provider has not published an external URL yet.
+- **`"waiting for ingress URL"`** — the `ingress` relation is joined but the provider has not published an external URL yet. The charm reaches this status before the provider first publishes a URL: `_reconcile` sets it when `self._ingress.url` is empty (`src/charm.py`). It does **not** reliably cover a URL *withdrawn after being present*. Clearing `external_hostname` on a `traefik-k8s` provider in `routing_mode=subdomain` withdraws the published URL from the relation databag, but this was verified at runtime to leave the unit `active`: `update-status` reconciles keep running, yet `self._ingress.url` does not report the withdrawal as empty (the requirer side does not surface the now-empty provider databag — see the `'app' expected but not received` warning, [Juju #1960934](https://bugs.launchpad.net/juju/+bug/1960934)), so the `if not url` guard never trips. The URL-derived env (`N8N_HOST`, `N8N_PROTOCOL`, `WEBHOOK_URL`, `N8N_EDITOR_BASE_URL`) is left at its stale values and the unit stays `ActiveStatus` even though the app returns `404`. There is **no status that signals a withdrawn ingress URL**.
 
 ---
 

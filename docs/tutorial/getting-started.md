@@ -42,12 +42,16 @@ juju config traefik-k8s routing_mode=subdomain external_hostname=example.com
 
 Replace `example.com` with a domain you control. Traefik publishes the URL `https://<model>-<app>.<external_hostname>/` — for this tutorial, `https://n8n-tutorial-n8n.example.com/`. That subdomain must resolve to Traefik's external address (the MetalLB-assigned IP shown in `juju status`). For a local test without DNS, add an `/etc/hosts` entry mapping the subdomain to that IP.
 
+Both settings are required. In `subdomain` routing mode Traefik builds the published host from `external_hostname`, so if `external_hostname` is empty it has no host to publish: it withdraws the ingress URL from the relation entirely and every request returns `404`. The n8n charm does not detect this withdrawal — the unit stays `active` with its previous, now-stale ingress env, so `juju status` gives no sign anything is wrong while the app is unreachable. Do not clear `external_hostname` while `routing_mode=subdomain`.
+
 Add the required relations. The `postgresql` and `ingress` relations (declared in `charmcraft.yaml`) are both mandatory; the unit blocks without either.
 
 ```bash
 juju integrate n8n postgresql-k8s
 juju integrate n8n:ingress traefik-k8s
 ```
+
+This tutorial uses `traefik-k8s`, but the `ingress` relation is provider-agnostic: `nginx-ingress-integrator` works too, configured for the same host-based topology through its `service-hostname` option instead of Traefik's `routing_mode`/`external_hostname`.
 
 Give Traefik a TLS certificate. n8n defaults to `N8N_SECURE_COOKIE=true` (n8n's own default, not set by the charm), so it sends its session cookie only over HTTPS. Over plain HTTP the login page loads but authentication at `/setup` fails because the browser withholds the cookie. (For throwaway HTTP-only test setups, the `environment` config option can override the default: `env: [{name: N8N_SECURE_COOKIE, value: "false"}]`.) Relate Traefik to `self-signed-certificates` so it terminates TLS and serves the UI over HTTPS:
 

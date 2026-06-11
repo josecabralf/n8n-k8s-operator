@@ -25,7 +25,9 @@ juju integrate n8n:ingress traefik-k8s
 juju integrate traefik-k8s:certificates self-signed-certificates:certificates
 ```
 
-Replace `example.com` with a domain whose subdomains resolve to Traefik's external address. Name both endpoints on the last `integrate`. `traefik-k8s` exposes `certificates` and `receive-ca-cert`, so the bare form fails as ambiguous.
+Replace `example.com` with a domain whose subdomains resolve to Traefik's external address. `external_hostname` is required: with `routing_mode=subdomain` and no `external_hostname` set, Traefik withdraws the ingress URL and requests return `404`. Name both endpoints on the last `integrate`. `traefik-k8s` exposes `certificates` and `receive-ca-cert`, so the bare form fails as ambiguous.
+
+The `n8n:ingress` endpoint uses the `ingress` v2 interface, so `nginx-ingress-integrator` works as an alternative to `traefik-k8s` for host-based routing (configure its `service-hostname`).
 
 Wait for all units to reach `active` (`juju status --watch 5s`), then create the owner account:
 
