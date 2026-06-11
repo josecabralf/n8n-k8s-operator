@@ -14,7 +14,8 @@ from ops.pebble import LayerDict
 
 logger = logging.getLogger(__name__)
 
-N8N_URL = "http://localhost:5678"
+N8N_PORT = 5678
+N8N_URL = f"http://localhost:{N8N_PORT}"
 
 VALID_LOG_LEVELS = frozenset({"debug", "info", "warn", "error"})
 VALID_SAVE_MODES = frozenset({"all", "none"})
@@ -289,7 +290,7 @@ def build_url_env(external_url: str) -> dict[str, str]:
     return {
         "N8N_HOST": parsed.hostname or "",
         "N8N_PROTOCOL": parsed.scheme or "http",
-        "N8N_PORT": "5678",
+        "N8N_PORT": str(N8N_PORT),
         "N8N_PROXY_HOPS": "1",
         "WEBHOOK_URL": external_url,
         "N8N_EDITOR_BASE_URL": external_url,

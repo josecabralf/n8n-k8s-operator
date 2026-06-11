@@ -27,6 +27,8 @@ from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingSta
 
 from pebble import (
     CHARM_MANAGED_ENV_ORIGIN,
+    N8N_PORT,
+    N8N_URL,
     build_environment_user_env,
     build_layer,
     build_runner_env,
@@ -47,7 +49,6 @@ METRICS_RELATION_NAME = "metrics-endpoint"
 INGRESS_RELATION_NAME = "ingress"
 S3_RELATION_NAME = "s3"
 DATABASE_NAME = "n8n"
-N8N_PORT = 5678
 
 ENCRYPTION_KEY_SECRET_LABEL = "n8n-encryption-key"
 ENCRYPTION_KEY_CONFIG = "encryption-key"
@@ -608,7 +609,7 @@ class N8nK8sCharm(CharmBase):
 
     def _probe_owner_setup(self) -> bool | None:
         """True → owner exists; False → not yet; None → cannot tell."""
-        url = f"http://localhost:{N8N_PORT}{OWNER_PROBE_PATH}"
+        url = f"{N8N_URL}{OWNER_PROBE_PATH}"
         try:
             with urllib.request.urlopen(url, timeout=OWNER_PROBE_TIMEOUT_S) as r:
                 payload = json.loads(r.read().decode("utf-8"))
