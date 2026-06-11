@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from ops.model import BlockedStatus, WaitingStatus
+from ops.model import ActiveStatus, BlockedStatus, WaitingStatus
 from ops.testing import Harness
 
 from charm import N8nK8sCharm
@@ -118,6 +118,38 @@ def test_pebble_checks_target_localhost(harness):
     plan = harness.get_container_pebble_plan(CONTAINER).to_dict()
     assert "localhost:5678" in plan["checks"]["live"]["http"]["url"]
     assert "localhost:5678" in plan["checks"]["ready"]["http"]["url"]
+
+
+def test_withdrawn_url_returns_to_waiting(harness, monkeypatch):
+    # Provider empties its app databag without breaking the relation (e.g.
+    # traefik external_hostname cleared). The requirer's StoredState still
+    # caches the old URL, so we must read the live databag to notice.
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: True)
+    _begin(harness)
+    harness.container_pebble_ready(CONTAINER)
+    _add_postgres(harness)
+    rel_id = _add_ingress(harness)
+    assert isinstance(harness.charm.unit.status, ActiveStatus)
+
+    # Withdraw the URL: emptying the "ingress" key removes it from the databag.
+    harness.update_relation_data(rel_id, TRAEFIK_APP, {"ingress": ""})
+
+    assert harness.charm.unit.status == WaitingStatus("waiting for ingress URL")
+
+
+def test_withdrawn_url_recovers_when_republished(harness, monkeypatch):
+    monkeypatch.setattr(N8nK8sCharm, "_probe_owner_setup", lambda self: True)
+    _begin(harness)
+    harness.container_pebble_ready(CONTAINER)
+    _add_postgres(harness)
+    rel_id = _add_ingress(harness)
+    harness.update_relation_data(rel_id, TRAEFIK_APP, {"ingress": ""})
+    assert harness.charm.unit.status == WaitingStatus("waiting for ingress URL")
+
+    harness.update_relation_data(rel_id, TRAEFIK_APP, {"ingress": json.dumps({"url": "http://back.example.com/"})})
+
+    assert isinstance(harness.charm.unit.status, ActiveStatus)
+    assert _env(harness)["N8N_HOST"] == "back.example.com"
 
 
 def test_revoked_returns_to_blocked(harness):

@@ -42,7 +42,7 @@ juju config traefik-k8s routing_mode=subdomain external_hostname=example.com
 
 Replace `example.com` with a domain you control. Traefik publishes the URL `https://<model>-<app>.<external_hostname>/` — for this tutorial, `https://n8n-tutorial-n8n.example.com/`. That subdomain must resolve to Traefik's external address (the MetalLB-assigned IP shown in `juju status`). For a local test without DNS, add an `/etc/hosts` entry mapping the subdomain to that IP.
 
-Both settings are required. In `subdomain` routing mode Traefik builds the published host from `external_hostname`, so if `external_hostname` is empty it has no host to publish: it withdraws the ingress URL from the relation entirely and every request returns `404`. The n8n charm does not detect this withdrawal — the unit stays `active` with its previous, now-stale ingress env, so `juju status` gives no sign anything is wrong while the app is unreachable. Do not clear `external_hostname` while `routing_mode=subdomain`.
+Both settings are required. In `subdomain` routing mode Traefik builds the published host from `external_hostname`, so if `external_hostname` is empty it has no host to publish: it withdraws the ingress URL from the relation entirely and every request returns `404`. The n8n charm detects this — the unit leaves `active` for `"waiting for ingress URL"`, so `juju status` flags the broken ingress, and it recovers automatically once you set `external_hostname` again. Avoid clearing `external_hostname` while `routing_mode=subdomain`.
 
 Add the required relations. The `postgresql` and `ingress` relations (declared in `charmcraft.yaml`) are both mandatory; the unit blocks without either.
 

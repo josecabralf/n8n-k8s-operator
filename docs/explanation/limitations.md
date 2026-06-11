@@ -56,11 +56,11 @@ Because the endpoint speaks the `ingress` v2 interface, any v2-compatible provid
 
 The charm serves n8n only at the root of a subdomain, never under a URL subpath. n8n emits root-relative links for its UI assets and static files, so path-based routing produces a broken UI: the index page loads, but asset requests resolve against the proxy root and return 404. The charm therefore sets no `N8N_PATH` and requests no prefix stripping. Host-based routing is the only supported topology, not a default that can be overridden.
 
-## `external_hostname` is required, and clearing it strands the unit
+## `external_hostname` is required in `subdomain` routing mode
 
 With `traefik-k8s` in `routing_mode=subdomain`, `external_hostname` must be set. Traefik builds the published subdomain `<model>-<app>.<external_hostname>` from it; with no hostname to build from, Traefik withdraws the ingress URL entirely and requests return 404.
 
-When the URL is withdrawn this way, the charm has a known rough edge, confirmed at runtime: it keeps the stale URL-derived env (`N8N_HOST`, `N8N_PROTOCOL`, `WEBHOOK_URL`, `N8N_EDITOR_BASE_URL`) in the running Pebble layer and the unit stays `active`, so the status gives no sign that ingress is broken. The reconcile loop does guard against a missing URL — it sets `"waiting for ingress URL"` when `self._ingress.url` is empty — and reconciles keep running on `update-status`, but the guard never trips: `self._ingress.url` does not report the withdrawal as empty (the requirer does not surface the now-empty provider databag, surfaced as the `'app' expected but not received` warning, [Juju #1960934](https://bugs.launchpad.net/juju/+bug/1960934)). Until that is addressed, a 404 on a previously working deployment can coexist with an `active` unit, and the cause is usually that `external_hostname` was cleared.
+The charm detects this withdrawal. It reads the live `ingress` relation databag (not the requirer library's cached `url`, which keeps returning the last-seen value after the provider empties its databag — [Juju #1960934](https://bugs.launchpad.net/juju/+bug/1960934)) and reconciles on `ingress-relation-changed`, so a withdrawn URL drops the unit out of `active` to `"waiting for ingress URL"` rather than leaving it falsely green. The workload keeps running with its previous env and recovers automatically once a URL is republished (for example, by setting `external_hostname` again). So a 404 on a previously working `subdomain`-mode deployment shows up as a `waiting` unit, and the usual cause is that `external_hostname` was cleared.
 
 ## `assumes:` block
 
