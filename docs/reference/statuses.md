@@ -74,7 +74,7 @@ The unit is healthy but waiting for an external dependency.
 
 - **`"waiting for database credentials"`** — the `postgresql` relation is joined but connection credentials have not yet been populated in the relation data.
 
-- **`"waiting for ingress URL"`** — the `ingress` relation is joined but the provider has not published an external URL yet.
+- **`"waiting for ingress URL"`** — the `ingress` relation is joined but no external URL is currently published. `_reconcile` sets this whenever the provider's published URL is empty (`src/charm.py`), covering both the initial wait before the provider first publishes a URL and the case where the provider later *withdraws* one (for example, clearing `external_hostname` on a `traefik-k8s` provider in `routing_mode=subdomain` empties the relation databag without breaking the relation). The charm reads the live provider databag directly rather than the requirer's cached `url`, and also reconciles on `ingress-relation-changed`, so a withdrawn URL drops the unit out of `active` to this status instead of going unnoticed. The workload keeps running with its previous env and recovers automatically when a URL is republished.
 
 ---
 

@@ -27,6 +27,8 @@ from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingSta
 
 from pebble import (
     CHARM_MANAGED_ENV_ORIGIN,
+    N8N_PORT,
+    N8N_URL,
     build_environment_user_env,
     build_layer,
     build_runner_env,
@@ -47,7 +49,6 @@ METRICS_RELATION_NAME = "metrics-endpoint"
 INGRESS_RELATION_NAME = "ingress"
 S3_RELATION_NAME = "s3"
 DATABASE_NAME = "n8n"
-N8N_PORT = 5678
 
 ENCRYPTION_KEY_SECRET_LABEL = "n8n-encryption-key"
 ENCRYPTION_KEY_CONFIG = "encryption-key"
@@ -107,11 +108,15 @@ class N8nK8sCharm(CharmBase):
             self,
             relation_name=INGRESS_RELATION_NAME,
             port=N8N_PORT,
-            strip_prefix=True,
             scheme="http",
         )
         self.framework.observe(self._ingress.on.ready, self._on_ingress_changed)
         self.framework.observe(self._ingress.on.revoked, self._on_ingress_changed)
+        # A provider that withdraws its URL (empties its app databag without
+        # breaking the relation) fires neither `ready` nor `revoked`, only a
+        # raw relation-changed. Observe it so the charm reconciles promptly
+        # instead of waiting for the next update-status.
+        self.framework.observe(self.on[INGRESS_RELATION_NAME].relation_changed, self._on_ingress_changed)
         self._metrics = MetricsEndpointProvider(
             self,
             relation_name=METRICS_RELATION_NAME,
@@ -542,7 +547,7 @@ class N8nK8sCharm(CharmBase):
         if self.model.get_relation(INGRESS_RELATION_NAME) is None:
             self.unit.status = BlockedStatus("waiting for ingress relation")
             return
-        url = self._ingress.url
+        url = self._published_ingress_url()
         if not url:
             self.unit.status = WaitingStatus("waiting for ingress URL")
             return
@@ -609,7 +614,7 @@ class N8nK8sCharm(CharmBase):
 
     def _probe_owner_setup(self) -> bool | None:
         """True → owner exists; False → not yet; None → cannot tell."""
-        url = f"http://localhost:{N8N_PORT}{OWNER_PROBE_PATH}"
+        url = f"{N8N_URL}{OWNER_PROBE_PATH}"
         try:
             with urllib.request.urlopen(url, timeout=OWNER_PROBE_TIMEOUT_S) as r:
                 payload = json.loads(r.read().decode("utf-8"))
@@ -652,6 +657,31 @@ class N8nK8sCharm(CharmBase):
         keys = ("bucket", "endpoint", "region", "access-key", "secret-key")
         creds = {k: info.get(k, "") for k in keys}
         return creds if all(creds.values()) else None
+
+    def _published_ingress_url(self) -> str | None:
+        """Return the ingress URL currently published by the provider, or None.
+
+        Reads the provider's app databag directly instead of trusting
+        ``IngressPerAppRequirer.url``: that accessor caches the last-seen URL in
+        StoredState and keeps returning it after the provider *withdraws* the
+        URL (empties its databag without breaking the relation), because the
+        requirer only refreshes its cache on a ``ready`` event. Reading the live
+        databag lets the charm notice the withdrawal and stop reporting active.
+        """
+        relation = self.model.get_relation(INGRESS_RELATION_NAME)
+        if relation is None or relation.app is None:
+            return None
+        try:
+            raw = relation.data[relation.app].get("ingress")
+        except ops.ModelError:
+            # Remote app databag not readable (e.g. mid relation-broken).
+            return None
+        if not raw:
+            return None
+        try:
+            return json.loads(raw).get("url") or None
+        except (ValueError, TypeError, AttributeError):
+            return None
 
     def _db_env(self) -> dict | None:
         """Return the Postgres env-var dict for n8n, or None if not ready."""

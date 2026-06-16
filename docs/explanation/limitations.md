@@ -52,6 +52,18 @@ juju integrate n8n:ingress traefik-k8s
 
 Because the endpoint speaks the `ingress` v2 interface, any v2-compatible provider satisfies it, not only `traefik-k8s`. `nginx-ingress-integrator` is one alternative.
 
+## Path-based ingress is unsupported
+
+The charm serves n8n only at the root of a subdomain, never under a URL subpath. n8n emits root-relative links for its UI assets and static files, so path-based routing produces a broken UI: the index page loads, but asset requests resolve against the proxy root and return 404. The charm therefore sets no `N8N_PATH` and requests no prefix stripping. Host-based routing is the only supported topology, not a default that can be overridden.
+
+`nginx-ingress-integrator` defaults to exactly this broken path-based topology: it routes under `/<model>-<app>` (for example `/n8n-n8n`), so setting `service-hostname` alone leaves the default path prefix in place and reproduces the broken-UI failure above. To serve n8n at the subdomain root, set both `service-hostname` and `path-routes=/`. (With `traefik-k8s` in `routing_mode=subdomain`, root serving is the default and no extra path configuration is needed.)
+
+## `external_hostname` is required in `subdomain` routing mode
+
+With `traefik-k8s` in `routing_mode=subdomain`, `external_hostname` must be set. Traefik builds the published subdomain `<model>-<app>.<external_hostname>` from it; with no hostname to build from, Traefik withdraws the ingress URL entirely and requests return 404.
+
+The charm detects this withdrawal. It reads the live `ingress` relation databag (not the requirer library's cached `url`, which keeps returning the last-seen value after the provider empties its databag — [Juju #1960934](https://bugs.launchpad.net/juju/+bug/1960934)) and reconciles on `ingress-relation-changed`, so a withdrawn URL drops the unit out of `active` to `"waiting for ingress URL"` rather than leaving it falsely green. The workload keeps running with its previous env and recovers automatically once a URL is republished (for example, by setting `external_hostname` again). So a 404 on a previously working `subdomain`-mode deployment shows up as a `waiting` unit, and the usual cause is that `external_hostname` was cleared.
+
 ## `assumes:` block
 
 The charm declares two deployment requirements in `charmcraft.yaml`:

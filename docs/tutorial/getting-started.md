@@ -34,6 +34,16 @@ juju deploy traefik-k8s --channel=latest/stable --trust
 juju deploy self-signed-certificates --channel=1/stable
 ```
 
+Configure Traefik for host-based routing. n8n's documentation recommends serving the application at the root of a subdomain rather than under a path, so switch Traefik to subdomain routing and give it the domain it advertises:
+
+```bash
+juju config traefik-k8s routing_mode=subdomain external_hostname=example.com
+```
+
+Replace `example.com` with a domain you control. Traefik publishes the URL `https://<model>-<app>.<external_hostname>/` — for this tutorial, `https://n8n-tutorial-n8n.example.com/`. That subdomain must resolve to Traefik's external address (the MetalLB-assigned IP shown in `juju status`). For a local test without DNS, add an `/etc/hosts` entry mapping the subdomain to that IP.
+
+Both settings are required. In `subdomain` routing mode Traefik builds the published host from `external_hostname`, so if `external_hostname` is empty it has no host to publish: it withdraws the ingress URL from the relation entirely and every request returns `404`. The n8n charm detects this — the unit leaves `active` for `"waiting for ingress URL"`, so `juju status` flags the broken ingress, and it recovers automatically once you set `external_hostname` again. Avoid clearing `external_hostname` while `routing_mode=subdomain`.
+
 Add the required relations. The `postgresql` and `ingress` relations (declared in `charmcraft.yaml`) are both mandatory; the unit blocks without either.
 
 ```bash
@@ -41,7 +51,9 @@ juju integrate n8n postgresql-k8s
 juju integrate n8n:ingress traefik-k8s
 ```
 
-Give Traefik a TLS certificate. n8n defaults to `N8N_SECURE_COOKIE=true` (n8n's own default, not set by the charm), so it sends its session cookie only over HTTPS. Over plain HTTP the login page loads but authentication at `/setup` fails because the browser withholds the cookie. Relate Traefik to `self-signed-certificates` so it terminates TLS and serves the UI over HTTPS:
+This tutorial uses `traefik-k8s`, but the `ingress` relation is provider-agnostic. `nginx-ingress-integrator` works too: set both `service-hostname` and `path-routes=/` in place of Traefik's `routing_mode`/`external_hostname`. Both are required for host-based root serving; see [Path-based ingress is unsupported](../explanation/limitations.md#path-based-ingress-is-unsupported).
+
+Give Traefik a TLS certificate. n8n defaults to `N8N_SECURE_COOKIE=true` (n8n's own default, not set by the charm), so it sends its session cookie only over HTTPS. Over plain HTTP the login page loads but authentication at `/setup` fails because the browser withholds the cookie. (For throwaway HTTP-only test setups, the `environment` config option can override the default: `env: [{name: N8N_SECURE_COOKIE, value: "false"}]`.) Relate Traefik to `self-signed-certificates` so it terminates TLS and serves the UI over HTTPS:
 
 ```bash
 juju integrate traefik-k8s:certificates self-signed-certificates:certificates
@@ -76,7 +88,7 @@ The `Message` column is empty when n8n is healthy with no active warnings. If no
 
 ## Reach the n8n UI
 
-The ingress provider publishes the external URL over the `ingress` relation. Traefik v2 defaults to path-based routing, and with the `certificates` relation in place it serves over HTTPS, so the URL takes the form `https://<host>/<model>-<app>/`, for example `https://10.x.x.x/n8n-tutorial-n8n/`.
+The ingress provider publishes the external URL over the `ingress` relation. With subdomain routing configured and the `certificates` relation in place, Traefik serves over HTTPS at the root of a subdomain, so the URL takes the form `https://<model>-<app>.<external_hostname>/`, for example `https://n8n-tutorial-n8n.example.com/`. The charm derives `N8N_PROTOCOL` from that URL's scheme (here `https`) and sets `N8N_PROXY_HOPS=1` so n8n trusts the `X-Forwarded-For`/`X-Forwarded-Host`/`X-Forwarded-Proto` headers Traefik adds as the single fronting proxy.
 
 Retrieve it from the unit's relation data:
 
@@ -86,7 +98,7 @@ juju show-unit n8n/0
 
 Look for the `ingress` relation data block; the URL is the value of the `url` field the provider published. Alternatively, the Traefik app status line in `juju status` shows the external address it is advertising.
 
-Traefik redirects plain HTTP to HTTPS, so `http://<host>/<model>-<app>/` returns `301` to the HTTPS URL. The `self-signed-certificates` charm issues a certificate that browsers do not trust. Accept the browser warning to proceed, or pass `-k` to `curl`.
+Traefik redirects plain HTTP to HTTPS, so `http://<model>-<app>.<external_hostname>/` returns `301` to the HTTPS URL. The `self-signed-certificates` charm issues a certificate that browsers do not trust. Accept the browser warning to proceed, or pass `-k` to `curl`.
 
 The charm reports `"waiting for ingress URL"` until the provider publishes that field. If Traefik has no external address yet (for example, MetalLB has not assigned one), wait for the address before accessing the UI.
 
