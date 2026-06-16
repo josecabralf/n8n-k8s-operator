@@ -56,6 +56,8 @@ Because the endpoint speaks the `ingress` v2 interface, any v2-compatible provid
 
 The charm serves n8n only at the root of a subdomain, never under a URL subpath. n8n emits root-relative links for its UI assets and static files, so path-based routing produces a broken UI: the index page loads, but asset requests resolve against the proxy root and return 404. The charm therefore sets no `N8N_PATH` and requests no prefix stripping. Host-based routing is the only supported topology, not a default that can be overridden.
 
+`nginx-ingress-integrator` defaults to exactly this broken path-based topology: it routes under `/<model>-<app>` (for example `/n8n-n8n`), so setting `service-hostname` alone leaves the default path prefix in place and reproduces the broken-UI failure above. To serve n8n at the subdomain root, set both `service-hostname` and `path-routes=/`. (With `traefik-k8s` in `routing_mode=subdomain`, root serving is the default and no extra path configuration is needed.)
+
 ## `external_hostname` is required in `subdomain` routing mode
 
 With `traefik-k8s` in `routing_mode=subdomain`, `external_hostname` must be set. Traefik builds the published subdomain `<model>-<app>.<external_hostname>` from it; with no hostname to build from, Traefik withdraws the ingress URL entirely and requests return 404.

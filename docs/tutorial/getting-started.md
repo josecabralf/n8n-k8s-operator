@@ -51,7 +51,7 @@ juju integrate n8n postgresql-k8s
 juju integrate n8n:ingress traefik-k8s
 ```
 
-This tutorial uses `traefik-k8s`, but the `ingress` relation is provider-agnostic: `nginx-ingress-integrator` works too, configured for the same host-based topology through its `service-hostname` option instead of Traefik's `routing_mode`/`external_hostname`.
+This tutorial uses `traefik-k8s`, but the `ingress` relation is provider-agnostic. `nginx-ingress-integrator` works too: set both `service-hostname` and `path-routes=/` in place of Traefik's `routing_mode`/`external_hostname`. Both are required for host-based root serving; see [Path-based ingress is unsupported](../explanation/limitations.md#path-based-ingress-is-unsupported).
 
 Give Traefik a TLS certificate. n8n defaults to `N8N_SECURE_COOKIE=true` (n8n's own default, not set by the charm), so it sends its session cookie only over HTTPS. Over plain HTTP the login page loads but authentication at `/setup` fails because the browser withholds the cookie. (For throwaway HTTP-only test setups, the `environment` config option can override the default: `env: [{name: N8N_SECURE_COOKIE, value: "false"}]`.) Relate Traefik to `self-signed-certificates` so it terminates TLS and serves the UI over HTTPS:
 
