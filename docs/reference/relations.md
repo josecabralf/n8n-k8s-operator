@@ -33,7 +33,7 @@ Because `N8N_PROTOCOL` is taken verbatim from the scheme of the URL the provider
 - **Optional**: no
 - **When absent**: unit blocks with `"waiting for ingress relation"`
 - **When relation present but the provider has not published a URL yet**: unit waits with `"waiting for ingress URL"`
-- **When the provider withdraws a previously-published URL** (for example, clearing `external_hostname` on a `traefik-k8s` provider in `routing_mode=subdomain`): the app becomes unreachable (`404`), but the charm does not detect it. Verified at runtime: the unit stays `active` with the stale URL-derived env (`N8N_HOST`, `N8N_PROTOCOL`, `WEBHOOK_URL`, `N8N_EDITOR_BASE_URL`). Reconciles still run, but `self._ingress.url` does not report the withdrawal as empty, so the unit never returns to `"waiting for ingress URL"`. There is no status for "URL withdrawn after being present" — see [statuses.md](statuses.md).
+- **When the provider withdraws a previously-published URL** (for example, clearing `external_hostname` on a `traefik-k8s` provider in `routing_mode=subdomain`): the app becomes unreachable (`404`), and the charm detects it. It reads the live relation databag rather than the requirer's cached `url`, so a withdrawn URL drops the unit out of `active` back to `"waiting for ingress URL"`. The workload keeps running with its previous env and recovers automatically when a URL is republished — see [statuses.md](statuses.md).
 
 #### Migrating from `traefik-route`
 
